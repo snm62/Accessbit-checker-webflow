@@ -1,0 +1,191 @@
+/* WelcomeScreen / Authorize screen styles */
+
+.welcome-screen {
+  width: 100%;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  display: flex;
+  flex-direction: column;
+}
+
+.welcome-main {
+  flex: 1;
+  padding: 28px 32px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+/* ── Hero ── */
+.welcome-hero {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+/* Illustration */
+.welcome-illustration {
+  position: relative;
+  width: 190px;
+  height: 84px;
+  margin-bottom: 4px;
+}
+.welcome-illus-browser {
+  position: absolute;
+  left: 0; top: 0;
+  width: 148px; height: 84px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 7px 9px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.welcome-illus-dots {
+  display: flex;
+  gap: 3px;
+}
+.welcome-illus-dots span {
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.22);
+}
+.welcome-illus-bar { height: 6px; width: 58%; border-radius: 3px; background: rgba(178,107,255,0.3); margin-top: 1px; }
+.welcome-illus-row { display: flex; align-items: center; gap: 4px; }
+.welcome-illus-line { height: 3px; border-radius: 2px; background: rgba(255,255,255,0.12); }
+.welcome-illus-err { width: 5px; height: 5px; border-radius: 50%; background: var(--red); }
+.welcome-illus-block { width: 36px; height: 20px; border-radius: 4px; background: rgba(255,255,255,0.05); border: 1px dashed var(--yellow); }
+.welcome-illus-cols { display: flex; gap: 6px; }
+.welcome-illus-text-col { flex: 1; display: flex; flex-direction: column; gap: 4px; padding-top: 2px; }
+.welcome-illus-highlight {
+  position: absolute; left: 0; right: 0; top: 34px; height: 15px;
+  background: rgba(198,244,50,0.08);
+  border-bottom: 2px solid var(--green);
+}
+.welcome-illus-avatar {
+  position: absolute; right: 6px; top: 16px;
+  width: 50px; height: 50px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 2px solid var(--green);
+  color: var(--text);
+  display: flex; align-items: center; justify-content: center;
+}
+.welcome-illus-tick {
+  position: absolute; right: -3px; top: 65px;
+  width: 18px; height: 5px;
+  border-radius: 3px;
+  background: var(--green);
+  transform: rotate(45deg);
+}
+
+/* Label + heading */
+.welcome-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.welcome-title {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.15;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+}
+.welcome-title-accent { color: var(--green); font-weight: 500; }
+.welcome-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* CTA */
+.welcome-cta {
+  margin-top: 10px;
+  width: 240px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--green);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.welcome-cta:hover { background: #DDFB7A; }
+.welcome-cta:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Tutorial card */
+.tutorial-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  text-decoration: none;
+}
+.tutorial-card:hover { border-color: rgba(255,255,255,0.14); }
+.tutorial-thumb {
+  width: 160px; height: 100px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  overflow: hidden;
+  position: relative;
+  background: repeating-linear-gradient(135deg, rgba(255,255,255,0.07) 0 4px, transparent 4px 8px), rgba(178,107,255,0.08);
+  border: 1px solid var(--purple-b);
+  display: flex; align-items: center; justify-content: center;
+}
+.tutorial-play {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.tutorial-label { font-family: var(--mono); font-size: 9px; color: #D9D5E0; position: absolute; left: 8px; bottom: 6px; }
+.tutorial-info {
+  flex: 1;
+  padding: 4px 6px 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tutorial-badge {
+  align-self: flex-start;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--subtle);
+  color: #D9D5E0;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex; align-items: center; gap: 5px;
+}
+.tutorial-title-text {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+.tutorial-sub { margin-top: auto; font-size: 10px; color: var(--muted); }

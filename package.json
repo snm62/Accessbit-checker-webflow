@@ -1,0 +1,38 @@
+{
+  "name": "accessibility-checker-webflow",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm install && concurrently \"webflow extension serve\" \"npm run watch-webpack\"",
+    "watch-webpack": "webpack --config webpack.config.mjs --mode development --watch",
+    "build": "npm run build-webpack && npm run move-maps && webflow extension bundle && npm run strip-telemetry && npm run postbuild-check",
+    "move-maps": "node -e \"const fs=require('fs');const path=require('path');fs.mkdirSync('maps',{recursive:true});['bundle.js.map','bundle.css.map'].forEach(f=>{const src='public/'+f;if(fs.existsSync(src)){fs.renameSync(src,'maps/'+f);console.log('moved',f,'→ maps/');}});\"",
+    "strip-telemetry": "node -e \"const fs=require('fs');const p='webflow.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));delete j.telemetry;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\\n');console.log('strip-telemetry: done');\"",
+    "build-webpack": "webpack --config webpack.config.mjs --mode production",
+    "postbuild-check": "node -e \"const fs=require('fs');const b=fs.readFileSync('public/bundle.js','utf8');const patterns=[/https?:\\/\\/localhost/,/https?:\\/\\/127\\.0\\.0\\.1/,/ngrok\\.(io|app)/];const found=patterns.filter(r=>r.test(b)).map(r=>r.toString());if(found.length){console.error('POSTBUILD FAIL: dev URLs in bundle:',found);process.exit(1);}else{console.log('POSTBUILD: ok');}\"",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/puppeteer": "^1.4.0",
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "@webflow/designer-extension-typings": "^2.0.2",
+    "babel-loader": "^9.1.3",
+    "concurrently": "^8.2.2",
+    "css-loader": "^7.1.2",
+    "mini-css-extract-plugin": "^2.9.2",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.4.5",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4",
+    "wrangler": "^4.164.0"
+  },
+  "dependencies": {
+    "axe-core": "^4.10.2",
+    "jwt-decode": "^4.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

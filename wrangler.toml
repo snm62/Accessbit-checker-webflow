@@ -1,0 +1,77 @@
+name = "accessibility-checker-webflow"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+rules = [
+  { type = "Text", globs = ["**/*.min.js"], fallthrough = true },
+  { type = "Text", globs = ["**/*.html"] }
+]
+
+[browser]
+binding = "MY_BROWSER"
+
+[vars]
+WEBFLOW_APP_URL = "https://accessibility-checker-webflow.web-8fb.workers.dev"
+ENVIRONMENT = "production"
+
+# Secrets — set via wrangler secret put:
+#   wrangler secret put WEBFLOW_CLIENT_ID
+#   wrangler secret put WEBFLOW_CLIENT_SECRET
+#   wrangler secret put WORKER_JWT_SECRET   ← generate with: openssl rand -hex 32
+#   wrangler secret put HMAC_SECRET         ← generate with: openssl rand -hex 32
+
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "6f507ab3133d4ec1a8b518108814ccb7"
+preview_id = "71ce8c76b5f94d4dbb314627363e549c"
+
+# D1 database — create with: wrangler d1 create accessibility-checker-db
+[[d1_databases]]
+binding = "DB"
+database_name = "accessibility-checker-db"
+database_id = "76fe7ed3-9189-446c-81ce-c9870062bc0d"
+
+# R2 bucket — create with: wrangler r2 bucket create accessibility-scan-results
+[[r2_buckets]]
+binding = "RESULTS"
+bucket_name = "accessibility-scan-results"
+
+# Queue producer
+[[queues.producers]]
+binding = "SCAN_QUEUE"
+queue = "accessibility-scan-queue"
+
+# Main scan consumer
+[[queues.consumers]]
+queue = "accessibility-scan-queue"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 2
+max_concurrency = 2
+dead_letter_queue = "accessibility-scan-dlq"
+
+# Dead-letter queue consumer
+[[queues.consumers]]
+queue = "accessibility-scan-dlq"
+max_batch_size = 10
+max_batch_timeout = 10
+max_retries = 1
+max_concurrency = 1
+
+# Durable Object — browser semaphore
+[[durable_objects.bindings]]
+name = "BROWSER_SEMAPHORE"
+class_name = "BrowserSemaphore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BrowserSemaphore"]
+
+# Cron — stuck-job sweep every 5 minutes
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability.logs]
+enabled = true
+invocation_logs = true
