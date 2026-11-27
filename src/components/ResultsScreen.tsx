@@ -11,10 +11,11 @@ interface Props {
   onRescan: () => void;
 }
 
-type TabFilter = 'all' | 'serious' | 'moderate';
+type TabFilter = 'all' | 'critical' | 'serious' | 'moderate' | 'minor' | 'needs-review';
 
 function sevChipClass(impact: string): string {
-  if (impact === 'critical' || impact === 'serious') return 'sev-chip--serious';
+  if (impact === 'critical') return 'sev-chip--critical';
+  if (impact === 'serious') return 'sev-chip--serious';
   if (impact === 'moderate') return 'sev-chip--moderate';
   return 'sev-chip--minor';
 }
@@ -103,15 +104,30 @@ function sevBorderColor(impact: string): string {
 const IssueGroup: React.FC<{ group: RuleGroup }> = ({ group }) => {
   const [open, setOpen] = useState(false);
   const [elemIdx, setElemIdx] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const [fixExpanded, setFixExpanded] = useState(false);
 
   const issue = group.issues[elemIdx];
   const totalElems = group.issues.length;
 
   const copySelector = () => {
     if (issue?.target) {
-      try { navigator.clipboard.writeText(issue.target); } catch {}
+      try {
+        navigator.clipboard.writeText(issue.target).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }).catch(() => {});
+      } catch {}
     }
   };
+
+  // Per-element failure summary (may differ per node); fall back to group howToFix
+  const elementFix: string = (issue as any)?.failureSummary || group.howToFix || '';
+  const FIX_PREVIEW_LEN = 160;
+  const fixNeedsToggle = elementFix.length > FIX_PREVIEW_LEN;
+  const fixPreview = fixNeedsToggle && !fixExpanded
+    ? elementFix.slice(0, FIX_PREVIEW_LEN).trimEnd() + '…'
+    : elementFix;
 
   const complianceTag = '';
 
@@ -136,14 +152,14 @@ const IssueGroup: React.FC<{ group: RuleGroup }> = ({ group }) => {
               <span className="issue-wcag-tag">{complianceTag}</span>
             )}
           </div>
-          <div className="issue-group-title-row">
-            <span className="issue-group-title">{group.message}</span>
-            <span className="issue-elem-count">{totalElems} element{totalElems !== 1 ? 's' : ''}</span>
-          </div>
+          <span className="issue-group-title">{group.message}</span>
         </div>
-        <svg className={`issue-group-chevron ${open ? 'issue-group-chevron--open' : ''}`} aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M6 9l6 6 6-6"/>
-        </svg>
+        <div className="issue-group-right">
+          <span className="issue-elem-count">{totalElems} element{totalElems !== 1 ? 's' : ''}</span>
+          <svg className={`issue-group-chevron ${open ? 'issue-group-chevron--open' : ''}`} aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </div>
       </button>
 
       {open && (
@@ -169,15 +185,26 @@ const IssueGroup: React.FC<{ group: RuleGroup }> = ({ group }) => {
             </div>
           )}
 
-          {group.howToFix && (
+          {elementFix && (
             <div className="issue-fix-card">
               <div className="issue-fix-card-title">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/>
-                </svg>
+                <span className="issue-fix-icon-badge" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none">
+                    <path d="M5 12l4 4 10-10" stroke="#0D0A12" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </span>
                 How to fix
               </div>
-              <p className="issue-fix-card-body">{group.howToFix}</p>
+              <p className="issue-fix-card-body">{fixPreview}</p>
+              {fixNeedsToggle && (
+                <button
+                  type="button"
+                  className="issue-fix-toggle"
+                  onClick={() => setFixExpanded(e => !e)}
+                >
+                  {fixExpanded ? 'Show less' : 'Show full details'}
+                </button>
+              )}
             </div>
           )}
 
@@ -185,7 +212,7 @@ const IssueGroup: React.FC<{ group: RuleGroup }> = ({ group }) => {
             {issue?.target && (
               <button type="button" className="issue-action-btn" onClick={copySelector}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                Copy selector
+                {copied ? 'Copied' : 'Copy selector'}
               </button>
             )}
           </div>
@@ -200,28 +227,51 @@ const ResultsScreen: React.FC<Props> = ({ results, pageUrl, pageTitle, pageScore
 
   const filtered = results.filter(r => {
     if (tab === 'all') return true;
-    if (tab === 'serious') return r.impact === 'critical' || r.impact === 'serious';
-    return r.impact === 'moderate';
+    if (tab === 'needs-review') return (r as any).status === 'needs-review';
+    return r.impact === tab;
   });
 
   const groups = groupByRule(filtered);
-  const seriousCount  = results.filter(r => r.impact === 'critical' || r.impact === 'serious').length;
-  const moderateCount = results.filter(r => r.impact === 'moderate').length;
+  const criticalCount    = results.filter(r => r.impact === 'critical').length;
+  const seriousCount     = results.filter(r => r.impact === 'serious').length;
+  const moderateCount    = results.filter(r => r.impact === 'moderate').length;
+  const minorCount       = results.filter(r => r.impact === 'minor').length;
+  const needsReviewCount = results.filter(r => (r as any).status === 'needs-review').length;
 
-  const score = pageScore ?? Math.max(0, 100
-    - results.filter(r => r.impact === 'critical').length * 10
-    - results.filter(r => r.impact === 'serious').length * 5
-    - results.filter(r => r.impact === 'moderate').length * 2
-    - results.filter(r => r.impact === 'minor').length);
+  // Rule-weighted score (matches backend formula)
+  const computedScore = (() => {
+    const WEIGHTS: Record<string, number> = { critical: 10, serious: 7, moderate: 3, minor: 1 };
+    const worstImpact = new Map<string, string>();
+    const instanceCount = new Map<string, number>();
+    for (const r of results) {
+      const order = ['critical', 'serious', 'moderate', 'minor'];
+      const prev = worstImpact.get(r.rule);
+      if (!prev || order.indexOf(r.impact) < order.indexOf(prev)) worstImpact.set(r.rule, r.impact);
+      instanceCount.set(r.rule, (instanceCount.get(r.rule) ?? 0) + 1);
+    }
+    let deduction = 0;
+    for (const [rule, impact] of worstImpact) {
+      const base = WEIGHTS[impact] ?? 1;
+      const n = instanceCount.get(rule) ?? 1;
+      deduction += base + Math.min(3, Math.log2(n + 1) * 0.5);
+    }
+    return Math.max(0, Math.round(100 - deduction));
+  })();
+
+  const score = pageScore ?? computedScore;
 
   let urlPath = pageUrl;
   try { urlPath = new URL(pageUrl).pathname || pageUrl; } catch {}
 
-  const tabs = [
-    { key: 'all' as TabFilter,      label: 'All',      count: results.length,  inactiveColor: '' },
-    { key: 'serious' as TabFilter,  label: 'Serious',  count: seriousCount,    inactiveColor: 'var(--red-text)' },
-    { key: 'moderate' as TabFilter, label: 'Moderate', count: moderateCount,   inactiveColor: 'var(--yellow)' },
+  const allTabs: { key: TabFilter; label: string; count: number; inactiveColor: string }[] = [
+    { key: 'all',          label: 'All',          count: results.length,  inactiveColor: '' },
+    { key: 'critical',     label: 'Critical',     count: criticalCount,   inactiveColor: 'var(--red-text)' },
+    { key: 'serious',      label: 'Serious',      count: seriousCount,    inactiveColor: 'var(--red-text)' },
+    { key: 'moderate',     label: 'Moderate',     count: moderateCount,   inactiveColor: 'var(--yellow)' },
+    { key: 'minor',        label: 'Minor',        count: minorCount,      inactiveColor: 'var(--dim)' },
+    { key: 'needs-review', label: 'Needs Review', count: needsReviewCount, inactiveColor: 'var(--blue, #6ea8fe)' },
   ];
+  const tabs = allTabs.filter(t => t.key === 'all' || t.count > 0);
 
   return (
     <div className="results-screen">
@@ -281,25 +331,28 @@ const ResultsScreen: React.FC<Props> = ({ results, pageUrl, pageTitle, pageScore
             const sevHeadingColor = (impact: string) => {
               if (impact === 'critical' || impact === 'serious') return 'var(--red-text)';
               if (impact === 'moderate') return 'var(--yellow)';
-              return 'var(--dim)';
+              if (impact === 'minor') return 'var(--dim)';
+              return 'var(--blue, #6ea8fe)';
             };
             const sevHeadingDot = (impact: string) => {
               if (impact === 'critical' || impact === 'serious') return 'var(--red)';
               if (impact === 'moderate') return 'var(--yellow)';
-              return 'var(--dim)';
+              if (impact === 'minor') return 'var(--dim)';
+              return 'var(--blue, #6ea8fe)';
             };
             const sevHeadingLabel = (impact: string) => {
-              if (impact === 'critical' || impact === 'serious') return 'SERIOUS';
+              if (impact === 'critical') return 'CRITICAL';
+              if (impact === 'serious') return 'SERIOUS';
               if (impact === 'moderate') return 'MODERATE';
-              return 'MINOR';
+              if (impact === 'minor') return 'MINOR';
+              return 'NEEDS REVIEW';
             };
-            const normalizedSev = (impact: string) =>
-              (impact === 'critical' || impact === 'serious') ? 'serious' : impact;
+            const normalizedSev = (impact: string) => impact;
 
             for (const g of groups) {
               const ns = normalizedSev(g.impact);
               if (ns !== lastSev) {
-                const count = groups.filter(x => normalizedSev(x.impact) === ns)
+                const count = groups.filter(x => x.impact === ns)
                   .reduce((n, x) => n + x.issues.length, 0);
                 rows.push(
                   <div key={`hd-${ns}`} className="sev-section-heading" style={{ color: sevHeadingColor(g.impact) }}>

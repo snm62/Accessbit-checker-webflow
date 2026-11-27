@@ -645,15 +645,12 @@ function useAuth() {
             }
         }
         catch {
-            // webflow API may not be available outside designer
         }
         return false;
     };
     (0,react_production_min_namespaceFn().useEffect)(() => {
         (async () => {
             setIsLoading(true);
-            // R4: If localStorage has siteInfo but it belongs to a different site than
-            // the currently-open one, discard the cache — it was left by a previous site.
             const stored = readStoredSiteInfo();
             if (stored) {
                 let currentSiteId = null;
@@ -681,7 +678,9 @@ function useAuth() {
     const authorize = () => {
         // S3: state is now minted server-side; we pass siteId so it can be embedded in the state
         const siteId = siteInfo?.siteId;
-        const authUrl = `${WORKER_BASE_URL}/api/scanner/auth/authorize${siteId ? `?siteId=${siteId}` : ''}`;
+        // Mint a one-time nonce to bind this exact popup to this handler
+        const nonce = crypto.randomUUID();
+        const authUrl = `${WORKER_BASE_URL}/api/scanner/auth/authorize?nonce=${nonce}${siteId ? `&siteId=${siteId}` : ''}`;
         const authWin = window.open(authUrl, 'wf-scanner-auth', 'width=600,height=700,left=200,top=100');
         if (!authWin)
             return;
@@ -689,10 +688,10 @@ function useAuth() {
         const workerOrigin = new URL(WORKER_BASE_URL).origin;
         // Listen for postMessage from popup (AccessBit pattern)
         const handleMessage = async (event) => {
-            // Validate: must come from our worker origin
+            // Validate origin: must come from our worker
             if (!event.origin || event.origin !== workerOrigin)
                 return;
-            // Validate: must be our popup window
+            // Validate source: must come from the exact popup window we opened
             if (event.source !== authWin)
                 return;
             // S4: popup now posts AUTH_COMPLETE only — no token through postMessage
@@ -702,14 +701,9 @@ function useAuth() {
             window.removeEventListener('message', handleMessage, true);
             window.clearInterval(pollRef.current);
             pollRef.current = null;
-            // Session comes from designer-token (called inside attemptAuth)
             await attemptAuth();
         };
         window.addEventListener('message', handleMessage, true);
-        // Poll for window close OR periodic auth check.
-        // In Webflow Designer, window.open may produce a full tab rather than a popup,
-        // so we can't rely solely on authWin.closed — also retry auth every 3 s so the
-        // extension activates as soon as the OAuth redirect lands back in the Designer.
         let pollCount = 0;
         pollRef.current = window.setInterval(async () => {
             pollCount++;
@@ -843,6 +837,7 @@ const WelcomeScreen = ({ isLoading, isAuthenticated, siteName, onAuthorize, onCo
 
 
 const POLL_INTERVAL_MS = 4000;
+const MAX_PAGES_PER_SCAN = 10;
 /* ── Score ring (SVG) ───────────────────────────────────────────────────── */
 const ScanRing = ({ done, total }) => {
     const r = 68;
@@ -866,11 +861,14 @@ const ScanRing = ({ done, total }) => {
             (react_production_min_namespaceFn().createElement)("span", { className: "scan-ring-denom" }, "PAGES"))));
 };
 /* ── Main component ─────────────────────────────────────────────────────── */
-const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, onHistory }) => {
+const ScannerScreen = ({ siteInfo, onScanComplete, onScanningChange, makeAuthRequest, onLogout, onHistory }) => {
     const [pages, setPages] = (0,react_production_min_namespaceFn().useState)([]);
     const [selectedIds, setSelectedIds] = (0,react_production_min_namespaceFn().useState)(new Set());
     const [pagesLoading, setPagesLoading] = (0,react_production_min_namespaceFn().useState)(false);
     const [pagesError, setPagesError] = (0,react_production_min_namespaceFn().useState)(null);
+    const [quota, setQuota] = (0,react_production_min_namespaceFn().useState)(null);
+    const [quotaLoading, setQuotaLoading] = (0,react_production_min_namespaceFn().useState)(false);
+    const [pageSearch, setPageSearch] = (0,react_production_min_namespaceFn().useState)('');
     const [activeJob, setActiveJob] = (0,react_production_min_namespaceFn().useState)(null);
     const [scanError, setScanError] = (0,react_production_min_namespaceFn().useState)(null);
     const [scanLoading, setScanLoading] = (0,react_production_min_namespaceFn().useState)(false);
@@ -881,10 +879,19 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
         if (!siteInfo?.siteId)
             return;
         fetchPages();
+        fetchQuota();
         checkActiveJob();
     }, [siteInfo?.siteId]);
     (0,react_production_min_namespaceFn().useEffect)(() => () => { if (pollRef.current)
         clearInterval(pollRef.current); }, []);
+    const fetchQuota = (0,react_production_min_namespaceFn().useCallback)(() => {
+        setQuotaLoading(true);
+        makeAuthRequest('/api/scanner/quota')
+            .then(res => res.ok ? res.json() : Promise.reject())
+            .then(data => setQuota(data))
+            .catch(() => { })
+            .finally(() => setQuotaLoading(false));
+    }, [makeAuthRequest]);
     function fetchPages() {
         if (!siteInfo?.siteId)
             return;
@@ -898,7 +905,11 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
             : res.json().then(d => Promise.reject(new Error(d.error || `Error ${res.status}`))))
             .then(data => {
             setPages(data.pages);
-            setSelectedIds(new Set(data.pages.map((p) => p.pageId)));
+            // Pre-select up to remainingQuota pages (falls back to MAX_PAGES_PER_SCAN if quota not yet loaded)
+            setSelectedIds(prev => {
+                const cap = Math.min(MAX_PAGES_PER_SCAN, data.pages.length);
+                return new Set(data.pages.slice(0, cap).map((p) => p.pageId));
+            });
         })
             .catch((err) => setPagesError(err.message))
             .finally(() => setPagesLoading(false));
@@ -965,15 +976,18 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
                 }
                 if (job.status === 'failed')
                     setScanError('The scan failed. Check individual page results.');
+                // Refresh quota so the counter reflects pages just consumed
+                fetchQuota();
             }
         }
         catch { }
-    }, [pages, makeAuthRequest, onScanComplete]);
+    }, [pages, makeAuthRequest, onScanComplete, fetchQuota]);
     const startScan = async () => {
         if (!selectedIds.size || isScanning || scanLoading)
             return;
         setScanError(null);
         setScanLoading(true);
+        onScanningChange?.(true);
         scanStartRef.current = null;
         try {
             const res = await makeAuthRequest('/api/scanner/jobs', {
@@ -989,6 +1003,10 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
                 }
                 else
                     setScanError(data.error || 'A scan is already running.');
+                return;
+            }
+            if (res.status === 429) {
+                setScanError(data.error || 'Please wait before scanning again.');
                 return;
             }
             if (res.status === 402) {
@@ -1021,35 +1039,49 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
         }
         catch { }
     };
+    const effectiveCap = Math.min(MAX_PAGES_PER_SCAN, quota?.remainingQuota ?? MAX_PAGES_PER_SCAN);
     const togglePage = (pageId) => {
         if (isScanning)
             return;
         setSelectedIds(prev => {
             const next = new Set(prev);
-            next.has(pageId) ? next.delete(pageId) : next.add(pageId);
+            if (next.has(pageId)) {
+                next.delete(pageId);
+            }
+            else if (next.size < effectiveCap) {
+                next.add(pageId);
+            }
             return next;
         });
     };
-    const allSelected = pages.length > 0 && selectedIds.size === pages.length;
+    const allSelected = pages.length > 0 && selectedIds.size === Math.min(pages.length, effectiveCap);
     const toggleAll = () => {
         if (isScanning)
             return;
-        setSelectedIds(allSelected ? new Set() : new Set(pages.map(p => p.pageId)));
+        if (allSelected) {
+            setSelectedIds(new Set());
+        }
+        else {
+            setSelectedIds(new Set(pages.slice(0, effectiveCap).map(p => p.pageId)));
+        }
     };
     const scanProgress = activeJob ? activeJob.donePages + activeJob.failedPages + activeJob.skippedPages : 0;
     const scanTotal = activeJob?.totalPages ?? 0;
     const progressPct = scanTotal > 0 ? Math.round((scanProgress / scanTotal) * 100) : 0;
     const timeRemainingLabel = (() => {
-        if (!scanStartRef.current || scanProgress === 0 || scanTotal === 0)
+        if (!scanStartRef.current || scanTotal === 0)
             return '';
+        if (scanProgress === 0)
+            return 'Calculating…';
         const elapsed = Date.now() - scanStartRef.current;
         const perPage = elapsed / scanProgress;
         const remaining = Math.round((scanTotal - scanProgress) * perPage / 1000);
         if (remaining <= 0)
             return '';
         if (remaining < 60)
-            return `About ${remaining}s left`;
-        return `About ${Math.round(remaining / 60)}m left`;
+            return `~${remaining}s left`;
+        const m = Math.floor(remaining / 60), s = remaining % 60;
+        return s > 0 ? `~${m}m ${s}s left` : `~${m}m left`;
     })();
     /* ── Shared header ─────────────────────────────────────────────────────── */
     const header = ((react_production_min_namespaceFn().createElement)("header", { className: "app-header" },
@@ -1091,13 +1123,9 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
                         (react_production_min_namespaceFn().createElement)("span", null,
                             progressPct,
                             "% complete"),
-                        activeJob?.failedPages > 0
-                            ? (react_production_min_namespaceFn().createElement)("span", { style: { color: 'var(--red-text)' } },
-                                activeJob.failedPages,
-                                " failed")
-                            : timeRemainingLabel
-                                ? (react_production_min_namespaceFn().createElement)("span", { style: { color: '#A49DB1' } }, timeRemainingLabel)
-                                : null)),
+                        timeRemainingLabel
+                            ? (react_production_min_namespaceFn().createElement)("span", { style: { color: '#A49DB1' } }, timeRemainingLabel)
+                            : null)),
                 (jobPages.length > 0 || scanTotal > 0) && ((react_production_min_namespaceFn().createElement)("div", { className: "scanning-queue" },
                     jobPages.length === 0 && Array.from({ length: Math.min(scanTotal, 6) }).map((_, i) => ((react_production_min_namespaceFn().createElement)("div", { key: i, className: "queue-row" },
                         (react_production_min_namespaceFn().createElement)("span", { className: "queue-status-icon" },
@@ -1179,30 +1207,57 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
                 (react_production_min_namespaceFn().createElement)("span", null, pagesError),
                 (react_production_min_namespaceFn().createElement)("button", { className: "btn-ghost", onClick: fetchPages, style: { marginLeft: 'auto', flexShrink: 0 } }, "Retry"))),
             !pagesLoading && !pagesError && pages.length > 0 && ((react_production_min_namespaceFn().createElement)("div", { className: "pages-panel" },
+                (react_production_min_namespaceFn().createElement)("div", { className: "pages-search-wrap" },
+                    (react_production_min_namespaceFn().createElement)("svg", { "aria-hidden": "true", width: "13", height: "13", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round" },
+                        (react_production_min_namespaceFn().createElement)("circle", { cx: "11", cy: "11", r: "7" }),
+                        (react_production_min_namespaceFn().createElement)("path", { d: "M21 21l-4.35-4.35" })),
+                    (react_production_min_namespaceFn().createElement)("input", { type: "text", className: "pages-search-input", placeholder: "Search pages\u2026", value: pageSearch, onChange: e => setPageSearch(e.target.value), disabled: isScanning, "aria-label": "Search pages" }),
+                    pageSearch && ((react_production_min_namespaceFn().createElement)("button", { type: "button", className: "pages-search-clear", onClick: () => setPageSearch(''), "aria-label": "Clear search" },
+                        (react_production_min_namespaceFn().createElement)("svg", { width: "11", height: "11", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round" },
+                            (react_production_min_namespaceFn().createElement)("path", { d: "M18 6L6 18M6 6l12 12" }))))),
                 (react_production_min_namespaceFn().createElement)("div", { className: "pages-panel-header" },
                     (react_production_min_namespaceFn().createElement)("div", { className: "pages-panel-header-left" },
                         (react_production_min_namespaceFn().createElement)("input", { type: "checkbox", className: "page-checkbox", checked: allSelected, onChange: toggleAll, "aria-label": allSelected ? 'Deselect all pages' : 'Select all pages' }),
                         (react_production_min_namespaceFn().createElement)("span", { className: "pages-panel-title" }, "PAGES TO SCAN")),
                     (react_production_min_namespaceFn().createElement)("span", { className: "pages-count-badge" },
-                        (react_production_min_namespaceFn().createElement)("span", { className: "pages-count-selected" },
-                            selectedIds.size,
-                            " / ",
-                            pages.length,
-                            " selected"))),
-                (react_production_min_namespaceFn().createElement)("div", { className: "pages-list" }, pages.map(p => {
-                    const checked = selectedIds.has(p.pageId);
-                    return ((react_production_min_namespaceFn().createElement)("label", { key: p.pageId, className: "page-row", onClick: () => togglePage(p.pageId) },
-                        (react_production_min_namespaceFn().createElement)("input", { type: "checkbox", className: "page-checkbox", checked: checked, onChange: () => togglePage(p.pageId), "aria-label": `Select ${p.title}` }),
-                        (react_production_min_namespaceFn().createElement)("span", { className: "page-title" }, p.title),
-                        p.path && (react_production_min_namespaceFn().createElement)("span", { className: "page-path" }, p.path)));
-                })))),
+                        (react_production_min_namespaceFn().createElement)("span", { className: "pages-count-selected" }, quota
+                            ? `Selected: ${selectedIds.size} / ${quota.remainingQuota} pages remaining today`
+                            : `${selectedIds.size} / ${MAX_PAGES_PER_SCAN} pages`))),
+                (react_production_min_namespaceFn().createElement)("div", { className: "pages-list" }, (() => {
+                    const q = pageSearch.trim().toLowerCase();
+                    const filtered = q
+                        ? pages.filter(p => p.title.toLowerCase().includes(q) ||
+                            p.path.toLowerCase().includes(q))
+                        : pages;
+                    if (filtered.length === 0 && q) {
+                        return ((react_production_min_namespaceFn().createElement)("div", { className: "pages-search-empty" },
+                            "No pages match \"",
+                            pageSearch,
+                            "\""));
+                    }
+                    return filtered.map(p => {
+                        const checked = selectedIds.has(p.pageId);
+                        const atLimit = selectedIds.size >= effectiveCap;
+                        return ((react_production_min_namespaceFn().createElement)("label", { key: p.pageId, className: "page-row" },
+                            (react_production_min_namespaceFn().createElement)("input", { type: "checkbox", className: "page-checkbox", checked: checked, onChange: () => togglePage(p.pageId), disabled: isScanning || (!checked && atLimit), "aria-label": `Select ${p.title}` }),
+                            (react_production_min_namespaceFn().createElement)("span", { className: "page-title" },
+                                (react_production_min_namespaceFn().createElement)("span", { className: "page-title-text" }, p.title),
+                                p.passwordProtected && (react_production_min_namespaceFn().createElement)("span", { className: "page-protected-badge" }, "Protected")),
+                            p.path && (react_production_min_namespaceFn().createElement)("span", { className: "page-path" }, p.path)));
+                    });
+                })()))),
             scanError && ((react_production_min_namespaceFn().createElement)("div", { className: "scanner-error-box" },
                 (react_production_min_namespaceFn().createElement)("svg", { className: "scanner-error-icon", "aria-hidden": "true", width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" },
                     (react_production_min_namespaceFn().createElement)("circle", { cx: "12", cy: "12", r: "9" }),
                     (react_production_min_namespaceFn().createElement)("path", { d: "M12 7v5M12 16h.01" })),
                 (react_production_min_namespaceFn().createElement)("span", null, scanError))),
+            !pagesLoading && !pagesError && pages.length > 0 && quota?.remainingQuota === 0 && ((react_production_min_namespaceFn().createElement)("div", { className: "scanner-error-box" },
+                (react_production_min_namespaceFn().createElement)("svg", { className: "scanner-error-icon", "aria-hidden": "true", width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" },
+                    (react_production_min_namespaceFn().createElement)("circle", { cx: "12", cy: "12", r: "9" }),
+                    (react_production_min_namespaceFn().createElement)("path", { d: "M12 7v5M12 16h.01" })),
+                (react_production_min_namespaceFn().createElement)("span", null, "Your site was scanned recently. Please wait 24 hours before scanning again."))),
             !pagesLoading && !pagesError && pages.length > 0 && ((react_production_min_namespaceFn().createElement)("div", { className: "scanner-cta-wrap" },
-                (react_production_min_namespaceFn().createElement)("button", { className: "btn-primary", onClick: startScan, disabled: !selectedIds.size || isScanning || scanLoading }, scanLoading ? ((react_production_min_namespaceFn().createElement)((react_production_min_namespaceFn().Fragment), null,
+                (react_production_min_namespaceFn().createElement)("button", { className: "btn-primary", onClick: startScan, disabled: !selectedIds.size || isScanning || scanLoading || (quota?.remainingQuota === 0) }, scanLoading ? ((react_production_min_namespaceFn().createElement)((react_production_min_namespaceFn().Fragment), null,
                     (react_production_min_namespaceFn().createElement)("span", { className: "scanner-cta-spinner" }),
                     "Starting\u2026")) : ((react_production_min_namespaceFn().createElement)((react_production_min_namespaceFn().Fragment), null,
                     "Scan ",
@@ -1216,7 +1271,11 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
                         (react_production_min_namespaceFn().createElement)("circle", { cx: "12", cy: "12", r: "9" }),
                         (react_production_min_namespaceFn().createElement)("path", { d: "M12 11v5M12 8h.01" })),
                     "Scan runs in the background \u2014 you can close this panel any time.")))),
-        (react_production_min_namespaceFn().createElement)("footer", { className: "app-footer app-footer--empty" })));
+        (react_production_min_namespaceFn().createElement)("footer", { className: "app-footer" },
+            (react_production_min_namespaceFn().createElement)("svg", { "aria-hidden": "true", width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" },
+                (react_production_min_namespaceFn().createElement)("circle", { cx: "12", cy: "12", r: "9" }),
+                (react_production_min_namespaceFn().createElement)("path", { d: "M12 11v5M12 8h.01" })),
+            (react_production_min_namespaceFn().createElement)("span", null, "Automated checks find roughly 30\u201350% of issues. Test keyboard, screen readers and alt text by hand."))));
 };
 /* harmony default export */ const components_ScannerScreen = (ScannerScreen);
 
@@ -1224,7 +1283,9 @@ const ScannerScreen = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, on
 
 
 function sevChipClass(impact) {
-    if (impact === 'critical' || impact === 'serious')
+    if (impact === 'critical')
+        return 'sev-chip--critical';
+    if (impact === 'serious')
         return 'sev-chip--serious';
     if (impact === 'moderate')
         return 'sev-chip--moderate';
@@ -1292,16 +1353,28 @@ function sevBorderColor(impact) {
 const IssueGroup = ({ group }) => {
     const [open, setOpen] = (0,react_production_min_namespaceFn().useState)(false);
     const [elemIdx, setElemIdx] = (0,react_production_min_namespaceFn().useState)(0);
+    const [copied, setCopied] = (0,react_production_min_namespaceFn().useState)(false);
+    const [fixExpanded, setFixExpanded] = (0,react_production_min_namespaceFn().useState)(false);
     const issue = group.issues[elemIdx];
     const totalElems = group.issues.length;
     const copySelector = () => {
         if (issue?.target) {
             try {
-                navigator.clipboard.writeText(issue.target);
+                navigator.clipboard.writeText(issue.target).then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                }).catch(() => { });
             }
             catch { }
         }
     };
+    // Per-element failure summary (may differ per node); fall back to group howToFix
+    const elementFix = issue?.failureSummary || group.howToFix || '';
+    const FIX_PREVIEW_LEN = 160;
+    const fixNeedsToggle = elementFix.length > FIX_PREVIEW_LEN;
+    const fixPreview = fixNeedsToggle && !fixExpanded
+        ? elementFix.slice(0, FIX_PREVIEW_LEN).trimEnd() + '…'
+        : elementFix;
     const complianceTag = '';
     return ((react_production_min_namespaceFn().createElement)("div", { className: "issue-group", style: { borderColor: open ? sevBorderColor(group.impact) : undefined } },
         (react_production_min_namespaceFn().createElement)("button", { type: "button", className: "issue-group-header", onClick: () => setOpen(o => !o), "aria-expanded": open },
@@ -1312,14 +1385,14 @@ const IssueGroup = ({ group }) => {
                         sevLabel(group.impact)),
                     group.rule && ((react_production_min_namespaceFn().createElement)("span", { className: "issue-group-rule" }, group.rule)),
                     complianceTag && ((react_production_min_namespaceFn().createElement)("span", { className: "issue-wcag-tag" }, complianceTag))),
-                (react_production_min_namespaceFn().createElement)("div", { className: "issue-group-title-row" },
-                    (react_production_min_namespaceFn().createElement)("span", { className: "issue-group-title" }, group.message),
-                    (react_production_min_namespaceFn().createElement)("span", { className: "issue-elem-count" },
-                        totalElems,
-                        " element",
-                        totalElems !== 1 ? 's' : ''))),
-            (react_production_min_namespaceFn().createElement)("svg", { className: `issue-group-chevron ${open ? 'issue-group-chevron--open' : ''}`, "aria-hidden": "true", width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round" },
-                (react_production_min_namespaceFn().createElement)("path", { d: "M6 9l6 6 6-6" }))),
+                (react_production_min_namespaceFn().createElement)("span", { className: "issue-group-title" }, group.message)),
+            (react_production_min_namespaceFn().createElement)("div", { className: "issue-group-right" },
+                (react_production_min_namespaceFn().createElement)("span", { className: "issue-elem-count" },
+                    totalElems,
+                    " element",
+                    totalElems !== 1 ? 's' : ''),
+                (react_production_min_namespaceFn().createElement)("svg", { className: `issue-group-chevron ${open ? 'issue-group-chevron--open' : ''}`, "aria-hidden": "true", width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round" },
+                    (react_production_min_namespaceFn().createElement)("path", { d: "M6 9l6 6 6-6" })))),
         open && ((react_production_min_namespaceFn().createElement)("div", { className: "issue-detail" },
             totalElems > 0 && ((react_production_min_namespaceFn().createElement)("div", { className: "issue-elem-nav" },
                 (react_production_min_namespaceFn().createElement)("span", { className: "issue-elem-nav-label" },
@@ -1336,46 +1409,70 @@ const IssueGroup = ({ group }) => {
                             (react_production_min_namespaceFn().createElement)("path", { d: "M9 6l6 6-6 6" })))))),
             issue?.target && ((react_production_min_namespaceFn().createElement)("div", { className: "issue-code-block" },
                 (react_production_min_namespaceFn().createElement)("pre", { className: "issue-code-pre" }, issue.target))),
-            group.howToFix && ((react_production_min_namespaceFn().createElement)("div", { className: "issue-fix-card" },
+            elementFix && ((react_production_min_namespaceFn().createElement)("div", { className: "issue-fix-card" },
                 (react_production_min_namespaceFn().createElement)("div", { className: "issue-fix-card-title" },
-                    (react_production_min_namespaceFn().createElement)("svg", { width: "13", height: "13", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
-                        (react_production_min_namespaceFn().createElement)("path", { d: "M22 11.08V12a10 10 0 1 1-5.93-9.14" }),
-                        (react_production_min_namespaceFn().createElement)("path", { d: "M22 4L12 14.01l-3-3" })),
+                    (react_production_min_namespaceFn().createElement)("span", { className: "issue-fix-icon-badge", "aria-hidden": "true" },
+                        (react_production_min_namespaceFn().createElement)("svg", { xmlns: "http://www.w3.org/2000/svg", width: "13", height: "13", viewBox: "0 0 24 24", fill: "none" },
+                            (react_production_min_namespaceFn().createElement)("path", { d: "M5 12l4 4 10-10", stroke: "#0D0A12", strokeWidth: "3", strokeLinecap: "round", strokeLinejoin: "round" }))),
                     "How to fix"),
-                (react_production_min_namespaceFn().createElement)("p", { className: "issue-fix-card-body" }, group.howToFix))),
+                (react_production_min_namespaceFn().createElement)("p", { className: "issue-fix-card-body" }, fixPreview),
+                fixNeedsToggle && ((react_production_min_namespaceFn().createElement)("button", { type: "button", className: "issue-fix-toggle", onClick: () => setFixExpanded(e => !e) }, fixExpanded ? 'Show less' : 'Show full details')))),
             (react_production_min_namespaceFn().createElement)("div", { className: "issue-actions" }, issue?.target && ((react_production_min_namespaceFn().createElement)("button", { type: "button", className: "issue-action-btn", onClick: copySelector },
                 (react_production_min_namespaceFn().createElement)("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
                     (react_production_min_namespaceFn().createElement)("rect", { x: "9", y: "9", width: "13", height: "13", rx: "2" }),
                     (react_production_min_namespaceFn().createElement)("path", { d: "M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" })),
-                "Copy selector")))))));
+                copied ? 'Copied' : 'Copy selector')))))));
 };
 const ResultsScreen = ({ results, pageUrl, pageTitle, pageScore, onBack, onRescan }) => {
     const [tab, setTab] = (0,react_production_min_namespaceFn().useState)('all');
     const filtered = results.filter(r => {
         if (tab === 'all')
             return true;
-        if (tab === 'serious')
-            return r.impact === 'critical' || r.impact === 'serious';
-        return r.impact === 'moderate';
+        if (tab === 'needs-review')
+            return r.status === 'needs-review';
+        return r.impact === tab;
     });
     const groups = groupByRule(filtered);
-    const seriousCount = results.filter(r => r.impact === 'critical' || r.impact === 'serious').length;
+    const criticalCount = results.filter(r => r.impact === 'critical').length;
+    const seriousCount = results.filter(r => r.impact === 'serious').length;
     const moderateCount = results.filter(r => r.impact === 'moderate').length;
-    const score = pageScore ?? Math.max(0, 100
-        - results.filter(r => r.impact === 'critical').length * 10
-        - results.filter(r => r.impact === 'serious').length * 5
-        - results.filter(r => r.impact === 'moderate').length * 2
-        - results.filter(r => r.impact === 'minor').length);
+    const minorCount = results.filter(r => r.impact === 'minor').length;
+    const needsReviewCount = results.filter(r => r.status === 'needs-review').length;
+    // Rule-weighted score (matches backend formula)
+    const computedScore = (() => {
+        const WEIGHTS = { critical: 10, serious: 7, moderate: 3, minor: 1 };
+        const worstImpact = new Map();
+        const instanceCount = new Map();
+        for (const r of results) {
+            const order = ['critical', 'serious', 'moderate', 'minor'];
+            const prev = worstImpact.get(r.rule);
+            if (!prev || order.indexOf(r.impact) < order.indexOf(prev))
+                worstImpact.set(r.rule, r.impact);
+            instanceCount.set(r.rule, (instanceCount.get(r.rule) ?? 0) + 1);
+        }
+        let deduction = 0;
+        for (const [rule, impact] of worstImpact) {
+            const base = WEIGHTS[impact] ?? 1;
+            const n = instanceCount.get(rule) ?? 1;
+            deduction += base + Math.min(3, Math.log2(n + 1) * 0.5);
+        }
+        return Math.max(0, Math.round(100 - deduction));
+    })();
+    const score = pageScore ?? computedScore;
     let urlPath = pageUrl;
     try {
         urlPath = new URL(pageUrl).pathname || pageUrl;
     }
     catch { }
-    const tabs = [
+    const allTabs = [
         { key: 'all', label: 'All', count: results.length, inactiveColor: '' },
+        { key: 'critical', label: 'Critical', count: criticalCount, inactiveColor: 'var(--red-text)' },
         { key: 'serious', label: 'Serious', count: seriousCount, inactiveColor: 'var(--red-text)' },
         { key: 'moderate', label: 'Moderate', count: moderateCount, inactiveColor: 'var(--yellow)' },
+        { key: 'minor', label: 'Minor', count: minorCount, inactiveColor: 'var(--dim)' },
+        { key: 'needs-review', label: 'Needs Review', count: needsReviewCount, inactiveColor: 'var(--blue, #6ea8fe)' },
     ];
+    const tabs = allTabs.filter(t => t.key === 'all' || t.count > 0);
     return ((react_production_min_namespaceFn().createElement)("div", { className: "results-screen" },
         (react_production_min_namespaceFn().createElement)("header", { className: "results-header" },
             (react_production_min_namespaceFn().createElement)("button", { className: "results-back-btn", onClick: onBack, "aria-label": "Back to all pages" },
@@ -1406,27 +1503,35 @@ const ResultsScreen = ({ results, pageUrl, pageTitle, pageScore, onBack, onResca
                     return 'var(--red-text)';
                 if (impact === 'moderate')
                     return 'var(--yellow)';
-                return 'var(--dim)';
+                if (impact === 'minor')
+                    return 'var(--dim)';
+                return 'var(--blue, #6ea8fe)';
             };
             const sevHeadingDot = (impact) => {
                 if (impact === 'critical' || impact === 'serious')
                     return 'var(--red)';
                 if (impact === 'moderate')
                     return 'var(--yellow)';
-                return 'var(--dim)';
+                if (impact === 'minor')
+                    return 'var(--dim)';
+                return 'var(--blue, #6ea8fe)';
             };
             const sevHeadingLabel = (impact) => {
-                if (impact === 'critical' || impact === 'serious')
+                if (impact === 'critical')
+                    return 'CRITICAL';
+                if (impact === 'serious')
                     return 'SERIOUS';
                 if (impact === 'moderate')
                     return 'MODERATE';
-                return 'MINOR';
+                if (impact === 'minor')
+                    return 'MINOR';
+                return 'NEEDS REVIEW';
             };
-            const normalizedSev = (impact) => (impact === 'critical' || impact === 'serious') ? 'serious' : impact;
+            const normalizedSev = (impact) => impact;
             for (const g of groups) {
                 const ns = normalizedSev(g.impact);
                 if (ns !== lastSev) {
-                    const count = groups.filter(x => normalizedSev(x.impact) === ns)
+                    const count = groups.filter(x => x.impact === ns)
                         .reduce((n, x) => n + x.issues.length, 0);
                     rows.push((react_production_min_namespaceFn().createElement)("div", { key: `hd-${ns}`, className: "sev-section-heading", style: { color: sevHeadingColor(g.impact) } },
                         (react_production_min_namespaceFn().createElement)("span", { style: { width: 7, height: 7, borderRadius: '50%', background: sevHeadingDot(g.impact), flexShrink: 0, display: 'inline-block' } }),
@@ -1506,7 +1611,7 @@ function formatDurMs(ms) {
     return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 /* ── Main component ─────────────────────────────────────────────────────── */
-const SiteResultsScreen = ({ results, siteName, scanDurationMs, onRescan, onHistory }) => {
+const SiteResultsScreen = ({ results, siteName, scanDurationMs, isScanning, onBack, onRescan, onHistory }) => {
     const [selectedPageUrl, setSelectedPageUrl] = (0,react_production_min_namespaceFn().useState)(null);
     const score = avgScore(results);
     const total = totalIssues(results);
@@ -1533,6 +1638,9 @@ const SiteResultsScreen = ({ results, siteName, scanDurationMs, onRescan, onHist
     }
     return ((react_production_min_namespaceFn().createElement)("div", { className: "site-results-screen" },
         (react_production_min_namespaceFn().createElement)("header", { className: "site-results-header" },
+            (react_production_min_namespaceFn().createElement)("button", { className: "btn-back", onClick: onBack, "aria-label": "Back" },
+                (react_production_min_namespaceFn().createElement)("svg", { "aria-hidden": "true", width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round" },
+                    (react_production_min_namespaceFn().createElement)("path", { d: "M19 12H5M11 6l-6 6 6 6" }))),
             (react_production_min_namespaceFn().createElement)("div", { className: "site-results-header-info" },
                 (react_production_min_namespaceFn().createElement)("span", { className: "site-results-header-title" }, "Audit results"),
                 (react_production_min_namespaceFn().createElement)("span", { className: "site-results-header-meta" },
@@ -1545,7 +1653,7 @@ const SiteResultsScreen = ({ results, siteName, scanDurationMs, onRescan, onHist
                         : null)),
             (react_production_min_namespaceFn().createElement)("div", { className: "site-results-header-actions" },
                 (react_production_min_namespaceFn().createElement)("button", { className: "btn-ghost", onClick: onHistory }, "History"),
-                (react_production_min_namespaceFn().createElement)("button", { className: "btn-rescan", onClick: onRescan },
+                (react_production_min_namespaceFn().createElement)("button", { className: "btn-rescan", onClick: onRescan, disabled: isScanning, title: isScanning ? 'A scan is currently in progress' : undefined, style: isScanning ? { opacity: 0.45, cursor: 'not-allowed', pointerEvents: 'none' } : undefined },
                     (react_production_min_namespaceFn().createElement)("svg", { "aria-hidden": "true", width: "13", height: "13", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.4", strokeLinecap: "round", strokeLinejoin: "round" },
                         (react_production_min_namespaceFn().createElement)("path", { d: "M20 11a8 8 0 1 0-2.3 5.7" }),
                         (react_production_min_namespaceFn().createElement)("path", { d: "M20 4v7h-7" })),
@@ -1566,8 +1674,8 @@ const SiteResultsScreen = ({ results, siteName, scanDurationMs, onRescan, onHist
                             scanned !== 1 ? 's' : '',
                             skipped > 0 ? ` · ${skipped} skipped` : '')),
                     total > 0 && ((react_production_min_namespaceFn().createElement)("div", { className: "site-score-bar" },
-                        (react_production_min_namespaceFn().createElement)("div", { className: "site-score-bar-serious", style: { width: `${seriousPct}%` } }),
-                        (react_production_min_namespaceFn().createElement)("div", { className: "site-score-bar-moderate", style: { flex: 1 } }))),
+                        serious > 0 && (react_production_min_namespaceFn().createElement)("div", { className: "site-score-bar-serious", style: { width: `${seriousPct}%` } }),
+                        moderate > 0 && (react_production_min_namespaceFn().createElement)("div", { className: "site-score-bar-moderate", style: { flex: 1 } }))),
                     (react_production_min_namespaceFn().createElement)("div", { className: "site-score-chips" },
                         serious > 0 && ((react_production_min_namespaceFn().createElement)("span", { className: "site-chip site-chip--serious" },
                             (react_production_min_namespaceFn().createElement)("span", { className: "site-chip-dot" }),
@@ -1688,6 +1796,22 @@ function siteHostname(url) {
         return '';
     }
 }
+function pageStatusLabel(entry) {
+    const s = entry.status ?? 'done';
+    if (s === 'done')
+        return null;
+    if (s === 'skipped') {
+        const e = (entry.error ?? '').toLowerCase();
+        if (e.includes('password'))
+            return 'Password protected';
+        if (e.includes('redirect'))
+            return 'Redirected';
+        return 'Skipped';
+    }
+    if (s === 'failed')
+        return entry.error ? `Failed: ${entry.error}` : 'Failed';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+}
 const HistoryScreen_ScoreRing = ({ score, isLatest }) => {
     const fill = (score / 100) * CIRC;
     const id = `hg-${score}-${isLatest ? 1 : 0}`;
@@ -1796,8 +1920,11 @@ const HistoryScreen = ({ makeAuthRequest, onBack, onViewScan }) => {
             visibleGroups.map((group, gi) => {
                 const isLatest = gi === 0;
                 const isOpen = openIdx === gi;
-                const avgScore = Math.round(group.pages.reduce((n, p) => n + (p.summary?.score ?? 0), 0) / group.pages.length);
-                const totalIssues = group.pages.reduce((n, p) => n + (p.summary?.total ?? 0), 0);
+                const scannedPages = group.pages.filter(p => (p.status ?? 'done') === 'done' && p.summary);
+                const avgScore = scannedPages.length > 0
+                    ? Math.round(scannedPages.reduce((n, p) => n + (p.summary.score ?? 0), 0) / scannedPages.length)
+                    : 0;
+                const totalIssues = scannedPages.reduce((n, p) => n + (p.summary?.total ?? 0), 0);
                 const totalDuration = group.pages.reduce((n, p) => n + (p.durationMs ?? 0), 0);
                 const dur = formatDuration(totalDuration);
                 return ((react_production_min_namespaceFn().createElement)("section", { key: group.scannedAt, className: "history-scan-card", "aria-label": `Scan on ${formatScanDate(group.scannedAt)}` },
@@ -1808,9 +1935,9 @@ const HistoryScreen = ({ makeAuthRequest, onBack, onViewScan }) => {
                                 formatScanDate(group.scannedAt),
                                 isLatest && (react_production_min_namespaceFn().createElement)("span", { className: "history-latest-badge" }, "Latest")),
                             (react_production_min_namespaceFn().createElement)("span", { className: "history-card-meta" },
-                                group.pages.length,
+                                scannedPages.length,
                                 " page",
-                                group.pages.length !== 1 ? 's' : '',
+                                scannedPages.length !== 1 ? 's' : '',
                                 " \u00B7 ",
                                 totalIssues,
                                 " issue",
@@ -1818,18 +1945,23 @@ const HistoryScreen = ({ makeAuthRequest, onBack, onViewScan }) => {
                                 dur ? ` · ${dur}` : '')),
                         (react_production_min_namespaceFn().createElement)("svg", { "aria-hidden": "true", className: `history-chevron${isOpen ? ' history-chevron--up' : ''}`, width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "#A49DB1", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
                             (react_production_min_namespaceFn().createElement)("path", { d: "M6 9l6 6 6-6" }))),
-                    isOpen && ((react_production_min_namespaceFn().createElement)("div", { className: "history-card-pages" }, group.pages.map((p, pi) => ((react_production_min_namespaceFn().createElement)("button", { key: p.scanId, type: "button", className: `history-page-row${pi === group.pages.length - 1 ? ' history-page-row--last' : ''}`, onClick: () => handleViewPage(p.scanId), disabled: loadingId === p.scanId },
-                        (react_production_min_namespaceFn().createElement)("span", { className: "history-page-label" },
-                            (react_production_min_namespaceFn().createElement)("span", { className: "history-page-name" }, pageLabel(p.pageUrl)),
-                            (react_production_min_namespaceFn().createElement)("span", { className: "history-page-path" }, pagePath(p.pageUrl))),
-                        (react_production_min_namespaceFn().createElement)("span", { className: "history-page-issues" },
-                            p.summary?.total ?? 0,
-                            " issues"),
-                        (react_production_min_namespaceFn().createElement)("span", { className: "history-score-pill", style: scorePillStyle(p.summary?.score ?? 0) }, p.summary?.score ?? '—'),
-                        loadingId === p.scanId
-                            ? (react_production_min_namespaceFn().createElement)("span", { className: "history-page-spinner" })
-                            : ((react_production_min_namespaceFn().createElement)("svg", { "aria-hidden": "true", width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "#8C8599", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
-                                (react_production_min_namespaceFn().createElement)("path", { d: "M9 6l6 6-6 6" }))))))))));
+                    isOpen && ((react_production_min_namespaceFn().createElement)("div", { className: "history-card-pages" }, group.pages.map((p, pi) => {
+                        const isScanned = (p.status ?? 'done') === 'done' && p.scanId;
+                        const reasonLabel = pageStatusLabel(p);
+                        return ((react_production_min_namespaceFn().createElement)("button", { key: p.scanId ?? `${p.pageUrl}-${pi}`, type: "button", className: `history-page-row${pi === group.pages.length - 1 ? ' history-page-row--last' : ''}${!isScanned ? ' history-page-row--unscanned' : ''}`, onClick: () => isScanned ? handleViewPage(p.scanId) : undefined, disabled: !isScanned || loadingId === p.scanId, style: !isScanned ? { cursor: 'default' } : undefined },
+                            (react_production_min_namespaceFn().createElement)("span", { className: "history-page-label" },
+                                (react_production_min_namespaceFn().createElement)("span", { className: "history-page-name" }, pageLabel(p.pageUrl)),
+                                (react_production_min_namespaceFn().createElement)("span", { className: "history-page-path" }, pagePath(p.pageUrl))),
+                            isScanned ? ((react_production_min_namespaceFn().createElement)((react_production_min_namespaceFn().Fragment), null,
+                                (react_production_min_namespaceFn().createElement)("span", { className: "history-page-issues" },
+                                    p.summary?.total ?? 0,
+                                    " issues"),
+                                (react_production_min_namespaceFn().createElement)("span", { className: "history-score-pill", style: scorePillStyle(p.summary?.score ?? 0) }, p.summary?.score ?? '—'),
+                                loadingId === p.scanId
+                                    ? (react_production_min_namespaceFn().createElement)("span", { className: "history-page-spinner" })
+                                    : ((react_production_min_namespaceFn().createElement)("svg", { "aria-hidden": "true", width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "#8C8599", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+                                        (react_production_min_namespaceFn().createElement)("path", { d: "M9 6l6 6-6 6" }))))) : ((react_production_min_namespaceFn().createElement)("span", { className: "history-page-reason" }, reasonLabel))));
+                    })))));
             }),
             hasHiddenGroups && ((react_production_min_namespaceFn().createElement)("button", { type: "button", className: "history-load-more-btn", onClick: () => setShowAll(true) },
                 (react_production_min_namespaceFn().createElement)("svg", { "aria-hidden": "true", width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" },
@@ -1871,8 +2003,10 @@ function hasStoredAuth() {
 const App = () => {
     const { isAuthenticated, isLoading, siteInfo, authorize, makeAuthRequest, logout } = useAuth();
     const [screen, setScreen] = (0,react_production_min_namespaceFn().useState)(() => hasStoredAuth() ? 'scanner' : 'welcome');
+    const [previousScreen, setPreviousScreen] = (0,react_production_min_namespaceFn().useState)('scanner');
     const [siteResults, setSiteResults] = (0,react_production_min_namespaceFn().useState)(null);
     const [scanDurationMs, setScanDurationMs] = (0,react_production_min_namespaceFn().useState)(undefined);
+    const [isScanning, setIsScanning] = (0,react_production_min_namespaceFn().useState)(false);
     (0,react_production_min_namespaceFn().useEffect)(() => {
         try {
             webflow.setExtensionSize('large');
@@ -1885,8 +2019,37 @@ const App = () => {
         }
     }, [isAuthenticated]);
     const handleScanComplete = (results, meta) => {
-        setSiteResults(results);
+        // Deduplicate site-level rules (e.g. html-has-lang applies to the whole site,
+        // not each page individually) — keep only the first occurrence across all pages.
+        const SITE_LEVEL_RULES = new Set(['html-has-lang', 'html-xml-lang-mismatch', 'html-lang-valid']);
+        const seenSiteRules = new Set();
+        const deduped = results.map(r => {
+            if (!r.issues?.length)
+                return r;
+            const filtered = r.issues.filter(issue => {
+                if (!SITE_LEVEL_RULES.has(issue.rule))
+                    return true;
+                if (seenSiteRules.has(issue.rule))
+                    return false;
+                seenSiteRules.add(issue.rule);
+                return true;
+            });
+            if (filtered.length === r.issues.length)
+                return r;
+            const removedCount = r.issues.length - filtered.length;
+            return {
+                ...r,
+                issues: filtered,
+                summary: r.summary ? {
+                    ...r.summary,
+                    total: Math.max(0, (r.summary.total ?? 0) - removedCount),
+                } : r.summary,
+            };
+        });
+        setSiteResults(deduped);
         setScanDurationMs(meta?.durationMs);
+        setIsScanning(false);
+        setPreviousScreen('scanner');
         setScreen('site-results');
     };
     const handleLogout = () => {
@@ -1899,10 +2062,11 @@ const App = () => {
         return ((react_production_min_namespaceFn().createElement)(components_WelcomeScreen, { isLoading: isLoading, isAuthenticated: isAuthenticated, siteName: siteInfo?.siteName, onAuthorize: authorize, onContinue: () => setScreen('scanner') }));
     }
     if (screen === 'site-results' && siteResults) {
-        return ((react_production_min_namespaceFn().createElement)(components_SiteResultsScreen, { results: siteResults, siteName: siteInfo?.siteName ?? '', scanDurationMs: scanDurationMs, onRescan: () => setScreen('scanner'), onHistory: () => setScreen('history') }));
+        return ((react_production_min_namespaceFn().createElement)(components_SiteResultsScreen, { results: siteResults, siteName: siteInfo?.siteName ?? '', scanDurationMs: scanDurationMs, isScanning: isScanning, onBack: () => setScreen(previousScreen), onRescan: () => setScreen('scanner'), onHistory: () => setScreen('history') }));
     }
     if (screen === 'history') {
         return ((react_production_min_namespaceFn().createElement)(components_HistoryScreen, { makeAuthRequest: makeAuthRequest, onBack: () => setScreen('scanner'), onViewScan: (issues, pageUrl) => {
+                setPreviousScreen('history');
                 // History still shows single-page results for now — wrap in a PageScanResult
                 setSiteResults([{
                         page: { pageId: '', title: pageUrl, slug: '', path: '', url: pageUrl, isCmsTemplate: false, collectionId: null, parentId: null },
@@ -1923,7 +2087,7 @@ const App = () => {
                 setScreen('site-results');
             } }));
     }
-    return ((react_production_min_namespaceFn().createElement)(components_ScannerScreen, { siteInfo: siteInfo, onScanComplete: handleScanComplete, makeAuthRequest: makeAuthRequest, onLogout: handleLogout, onHistory: () => setScreen('history') }));
+    return ((react_production_min_namespaceFn().createElement)(components_ScannerScreen, { siteInfo: siteInfo, onScanComplete: handleScanComplete, onScanningChange: setIsScanning, makeAuthRequest: makeAuthRequest, onLogout: handleLogout, onHistory: () => setScreen('history') }));
 };
 /* harmony default export */ const app = (App);
 

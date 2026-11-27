@@ -45,14 +45,14 @@
   gap: 2px;
 }
 .results-header-breadcrumb {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   letter-spacing: 0.01em;
 }
 .results-header-page {
-  font-size: 17px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
@@ -60,7 +60,7 @@
 }
 .results-header-path {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
@@ -81,9 +81,9 @@
   gap: 2px;
 }
 .page-score-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   color: var(--muted);
 }
 .page-score-status {
@@ -104,7 +104,7 @@
   justify-content: center;
 }
 .page-score-ring-num {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 300;
   line-height: 1;
   letter-spacing: -0.02em;
@@ -123,7 +123,7 @@
   gap: 12px;
 }
 .results-grouped-label {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted);
   letter-spacing: 0.06em;
@@ -144,7 +144,7 @@
   border: none;
   background: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   display: flex;
@@ -164,7 +164,7 @@
 }
 .results-tab--active .results-tab-sep { opacity: 0.5; }
 .results-tab-num {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   color: inherit;
 }
@@ -173,6 +173,7 @@
 .results-body {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 14px 16px 20px;
   display: flex;
   flex-direction: column;
@@ -194,7 +195,7 @@
 /* Issue group card */
 .issue-group {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border2);
   border-radius: 20px;
   overflow: hidden;
 }
@@ -203,7 +204,7 @@
   width: 100%;
   padding: 14px 16px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   cursor: pointer;
   background: none;
@@ -225,11 +226,11 @@
 }
 .issue-group-rule {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
 }
 .issue-wcag-tag {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--muted);
   background: rgba(255,255,255,0.05);
@@ -239,27 +240,27 @@
   letter-spacing: 0.03em;
 }
 
-/* Title row: message + element count inline */
-.issue-group-title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
 .issue-group-title {
-  flex: 1;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1.35;
   letter-spacing: -0.01em;
   color: var(--text);
+}
+
+/* Right side: element count + chevron grouped */
+.issue-group-right {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .issue-elem-count {
   flex-shrink: 0;
   font-size: 11px;
   font-weight: 600;
   color: #F4F2F7;
-  margin-top: 2px;
   background: rgba(255,255,255,0.06);
   border-radius: 6px;
   padding: 1px 6px;
@@ -269,7 +270,6 @@
   flex-shrink: 0;
   color: var(--dim);
   transition: transform 0.2s;
-  margin-top: 3px;
 }
 .issue-group-chevron--open { transform: rotate(180deg); }
 
@@ -324,9 +324,9 @@
 .issue-code-pre {
   margin: 0;
   font-family: 'JetBrains Mono', var(--mono);
-  font-size: 10px;
+  font-size: 12px;
   color: #D2B3FF;
-  line-height: 1.65;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -344,18 +344,48 @@
 .issue-fix-card-title {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
+  gap: 8px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--green);
 }
+.issue-fix-icon-badge {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #C6F432;
+  color: #0D0A12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .issue-fix-card-body {
   margin: 0;
-  font-size: 12px;
+  padding-left: 32px; /* 24px icon + 8px gap — aligns with the H of "How to fix" */
+  font-size: 13px;
   color: #F4F2F7;
-  line-height: 1.6;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
+
+.issue-fix-toggle {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 6px;
+  margin-left: 32px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--accent, #A78BFA);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.issue-fix-toggle:hover { opacity: 0.8; }
 
 /* Action buttons row */
 .issue-actions {
@@ -371,7 +401,7 @@
   background: var(--subtle);
   border: 1px solid var(--border3);
   color: #F4F2F7;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   font-family: var(--font);
   cursor: pointer;
@@ -386,7 +416,7 @@
   height: 18px;
   padding: 0 6px;
   border-radius: var(--radius-pill);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   display: flex;
   align-items: center;

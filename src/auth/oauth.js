@@ -1,13 +1,4 @@
-/**
- * Webflow OAuth — authorize, callback, me.
- *
- * Security fixes applied:
- *   S3  — server-minted single-use state stored in KV, bound to HttpOnly cookie
- *   S4  — popup posts only { type: 'AUTH_COMPLETE' }; session comes from designer-token
- *   S6  — siteId flows through state; tokens stored for every site the user granted
- *   S7  — raw token/redirect never echoed to browser; detail goes to logs only
- *   S9  — KV payloads encrypted with AES-GCM via TOKEN_ENC_KEY secret
- */
+
 
 import { signSessionToken } from './jwt.js';
 import { encryptPayload, decryptPayload } from './crypto.js';
@@ -22,20 +13,17 @@ const SCOPES = [
   'authorized_user:read',
 ].join(' ');
 
-// ── 1. Authorize ──────────────────────────────────────────────────────────────
-// Mints a random state, stores it in KV (10 min TTL) bound to a cookie,
-// and embeds the Designer siteId inside the KV record (S3, S6).
+
 
 export async function handleAuthorize(request, env) {
   const url    = new URL(request.url);
   const siteId = url.searchParams.get('siteId') ?? '';
 
-  // Mint a cryptographically random state token
+ 
   const stateToken = Array.from(crypto.getRandomValues(new Uint8Array(24)))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 
-  // Store state → { siteId } in KV, single-use, 10 min TTL
   await env.TOKENS.put(
     `scanner:oauth_state:${stateToken}`,
     JSON.stringify({ siteId, used: false }),
@@ -61,7 +49,7 @@ export async function handleAuthorize(request, env) {
   });
 }
 
-// ── 2. Callback ───────────────────────────────────────────────────────────────
+
 
 export async function handleCallback(request, env) {
   const url         = new URL(request.url);
@@ -80,11 +68,7 @@ export async function handleCallback(request, env) {
     return popupPage({ error: 'Authorization could not be completed. Please close this window and try again.' });
   }
 
-  // Note: Webflow does not echo state and strips query params from redirect_uri,
-  // so server-side state verification is skipped. CSRF risk is low because the
-  // popup is opened only by the Designer Extension running inside Webflow itself.
 
-  // Exchange code → access token (redirect_uri omitted — only one URI registered)
   const tokenRes = await fetch(WEBFLOW_TOKEN_URL, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -97,14 +81,14 @@ export async function handleCallback(request, env) {
   });
 
   if (!tokenRes.ok) {
-    // S7: log detail, show generic message
+   
     console.error('Token exchange failed:', tokenRes.status, await tokenRes.text().catch(() => ''));
     return popupPage({ error: 'Authorization failed. Please try again.' });
   }
 
   const { access_token } = await tokenRes.json();
 
-  // Fetch user info and all sites the user just granted access to
+
   const [userInfo, sitesInfo] = await Promise.all([
     fetchWebflow(access_token, '/v2/token/authorized_by'),
     fetchWebflow(access_token, '/v2/sites'),
@@ -135,25 +119,17 @@ export async function handleCallback(request, env) {
       siteInfo:     { siteId: sid, siteName, shortName },
     });
 
-    // S9: encrypt before storing
     const encrypted = await encryptPayload(kvPayload, env);
     await env.TOKENS.put(`scanner:auth:${sid}`, encrypted);
   }
 
-  // Redirect back to the Webflow Designer for the first authorized site.
-  // This handles both popup and full-tab OAuth flows.
-  const firstSite = sites[0];
-  const designerUrl = firstSite?.shortName
-    ? `https://webflow.com/design/${firstSite.shortName}`
-    : 'https://webflow.com/dashboard';
 
-  return new Response(null, {
-    status: 302,
-    headers: { Location: designerUrl },
-  });
+  const firstSite = sites[0];
+  const workerOrigin = new URL(request.url).origin;
+  return popupPage(null, { siteId: firstSite?.id ?? '', shortName: firstSite?.shortName ?? '', clientId: env.WEBFLOW_CLIENT_ID ?? '', workerOrigin });
 }
 
-// ── 3. Me — return user + site info for the current session ──────────────────
+
 
 export async function handleMe(request, env) {
   const claims = request._claims;
@@ -166,7 +142,7 @@ export async function handleMe(request, env) {
   });
 }
 
-// ── Shared KV helper (used by designerToken.js too) ──────────────────────────
+
 
 export async function getStoredAuth(siteId, env) {
   const raw = await env.TOKENS.get(`scanner:auth:${siteId}`);
@@ -179,7 +155,7 @@ export async function getStoredAuth(siteId, env) {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 async function fetchWebflow(accessToken, path) {
   try {
@@ -211,22 +187,40 @@ function jsonErr(message, status = 400) {
   });
 }
 
-// S4: success posts only { type: 'AUTH_COMPLETE' } — no token through postMessage
 function popupPage(errorInfo, successInfo = null) {
   const headers = { 'Content-Type': 'text/html' };
 
   if (successInfo) {
+    const { shortName, clientId, workerOrigin } = successInfo;
+
+    const designerUrl = shortName && clientId
+      ? `https://${shortName}.design.webflow.com?app=${clientId}`
+      : shortName
+        ? `https://webflow.com/design/${shortName}`
+        : 'https://webflow.com/dashboard';
     const script = `
-      try { window.opener && window.opener.postMessage({ type: 'AUTH_COMPLETE' }, '*'); } catch(e) {}
-      window.close();
+(function(){
+  var payload = ${JSON.stringify({ type: 'AUTH_COMPLETE' })};
+  var origin = ${JSON.stringify(workerOrigin)};
+  function send(){
+    try{ if(window.opener&&!window.opener.closed) window.opener.postMessage(payload,origin); }catch(e){}
+    try{ if(window.parent&&window.parent!==window) window.parent.postMessage(payload,origin); }catch(e){}
+  }
+  send();
+  setTimeout(send,100);
+  setTimeout(send,500);
+  // Redirect instead of window.close() — Designer context blocks close().
+  // 2000ms gives the opener time to receive AUTH_COMPLETE and call attemptAuth().
+  setTimeout(function(){ window.location.replace(${JSON.stringify(designerUrl)}); },2000);
+})();
     `;
     return new Response(
-      `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body><script>${script}<\/script></body></html>`,
+      `<!doctype html><meta charset="utf-8"><title>Authorizing...</title><script>${script}<\/script>`,
       { headers }
     );
   }
 
-  // S7: show a generic error message; raw detail already logged above
+ 
   const errMsg = errorInfo?.error ?? 'Something went wrong. Please try again.';
   const script = `
     if (window.opener) {

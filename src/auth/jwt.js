@@ -1,18 +1,9 @@
-/**
- * Minimal JWT (HS256) using the Web Crypto API.
- * No external dependencies — runs natively in Cloudflare Workers.
- *
- * Token payload:
- *   { sub: userId, siteId, jti: uuid, iat, exp }
- *
- * Add WORKER_JWT_SECRET as a Worker secret:
- *   wrangler secret put WORKER_JWT_SECRET
- */
 
-const SESSION_TTL_SECONDS = 3600; // 1 hour
-const REFRESH_BEFORE_EXPIRY = 60;  // auto-refresh 60s before expiry
 
-// ── Sign ──────────────────────────────────────────────────────────────────────
+const SESSION_TTL_SECONDS = 3600; 
+const REFRESH_BEFORE_EXPIRY = 60;  
+
+
 
 export async function signSessionToken(env, { userId, siteId }) {
   const now  = Math.floor(Date.now() / 1000);
@@ -35,7 +26,7 @@ export async function signSessionToken(env, { userId, siteId }) {
   return `${signing}.${sigB64}`;
 }
 
-// ── Verify ────────────────────────────────────────────────────────────────────
+
 
 export async function verifySessionToken(env, token) {
   if (!token || typeof token !== 'string') throw new Error('Missing token');
@@ -54,10 +45,26 @@ export async function verifySessionToken(env, token) {
   const now    = Math.floor(Date.now() / 1000);
   if (claims.exp < now) throw new Error('Token expired');
 
+  if (claims.jti && env.TOKENS) {
+    const revoked = await env.TOKENS.get(`scanner:jti:revoked:${claims.jti}`);
+    if (revoked) throw new Error('Token has been revoked');
+  }
+
   return claims;
 }
 
-// Returns seconds until token needs refresh (negative = already expired)
+export async function revokeToken(token, env) {
+  try {
+    const parts = token?.split('.');
+    if (!parts || parts.length !== 3) return;
+    const claims = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    if (!claims.jti || !claims.exp) return;
+    const ttl = Math.max(1, claims.exp - Math.floor(Date.now() / 1000));
+    await env.TOKENS.put(`scanner:jti:revoked:${claims.jti}`, '1', { expirationTtl: ttl });
+  } catch { /* ignore malformed tokens */ }
+}
+
+
 export function secondsUntilRefresh(token) {
   try {
     const payload = token.split('.')[1];
@@ -68,7 +75,7 @@ export function secondsUntilRefresh(token) {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 async function importKey(secret) {
   if (!secret) throw new Error('WORKER_JWT_SECRET is not set');

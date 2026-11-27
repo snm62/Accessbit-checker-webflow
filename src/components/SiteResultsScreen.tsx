@@ -7,6 +7,8 @@ interface Props {
   results: PageScanResult[];
   siteName: string;
   scanDurationMs?: number;
+  isScanning?: boolean;
+  onBack: () => void;
   onRescan: () => void;
   onHistory: () => void;
 }
@@ -90,7 +92,7 @@ function formatDurMs(ms: number): string {
 }
 
 /* ── Main component ─────────────────────────────────────────────────────── */
-const SiteResultsScreen: React.FC<Props> = ({ results, siteName, scanDurationMs, onRescan, onHistory }) => {
+const SiteResultsScreen: React.FC<Props> = ({ results, siteName, scanDurationMs, isScanning, onBack, onRescan, onHistory }) => {
   const [selectedPageUrl, setSelectedPageUrl] = useState<string | null>(null);
 
   const score    = avgScore(results);
@@ -133,6 +135,11 @@ const SiteResultsScreen: React.FC<Props> = ({ results, siteName, scanDurationMs,
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <header className="site-results-header">
+        <button className="btn-back" onClick={onBack} aria-label="Back">
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5M11 6l-6 6 6 6"/>
+          </svg>
+        </button>
         <div className="site-results-header-info">
           <span className="site-results-header-title">Audit results</span>
           <span className="site-results-header-meta">
@@ -145,7 +152,13 @@ const SiteResultsScreen: React.FC<Props> = ({ results, siteName, scanDurationMs,
         </div>
         <div className="site-results-header-actions">
           <button className="btn-ghost" onClick={onHistory}>History</button>
-          <button className="btn-rescan" onClick={onRescan}>
+          <button
+            className="btn-rescan"
+            onClick={onRescan}
+            disabled={isScanning}
+            title={isScanning ? 'A scan is currently in progress' : undefined}
+            style={isScanning ? { opacity: 0.45, cursor: 'not-allowed', pointerEvents: 'none' } : undefined}
+          >
             <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>
             </svg>
@@ -168,8 +181,8 @@ const SiteResultsScreen: React.FC<Props> = ({ results, siteName, scanDurationMs,
             </div>
             {total > 0 && (
               <div className="site-score-bar">
-                <div className="site-score-bar-serious" style={{ width: `${seriousPct}%` }} />
-                <div className="site-score-bar-moderate" style={{ flex: 1 }} />
+                {serious > 0 && <div className="site-score-bar-serious" style={{ width: `${seriousPct}%` }} />}
+                {moderate > 0 && <div className="site-score-bar-moderate" style={{ flex: 1 }} />}
               </div>
             )}
             <div className="site-score-chips">

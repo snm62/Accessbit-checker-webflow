@@ -47,7 +47,7 @@ queue = "accessibility-scan-queue"
 queue = "accessibility-scan-queue"
 max_batch_size = 5
 max_batch_timeout = 5
-max_retries = 2
+max_retries = 5
 max_concurrency = 2
 dead_letter_queue = "accessibility-scan-dlq"
 

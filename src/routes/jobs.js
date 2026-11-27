@@ -5,7 +5,8 @@
 import { listSitePages } from '../lib/pages.js';
 import { validateDomainOwnership } from '../lib/domains.js';
 
-const MAX_PAGE_IDS = 1000;
+const MAX_PAGE_IDS = 10;
+const FREE_PAGES_PER_24H = 10;
 
 // ── POST /api/scanner/jobs ────────────────────────────────────────────────────
 
@@ -53,6 +54,27 @@ export async function handleCreateJob(request, env) {
     throw Object.assign(
       new Error(`Selection of ${selectedPages.length} pages exceeds your plan limit of ${entitlement.pages_per_scan}.`),
       { status: 402, limit: entitlement.pages_per_scan, count: selectedPages.length }
+    );
+  }
+
+  // Rolling 24-hour page quota (count only done_pages from completed jobs)
+  const dailyLimit = entitlement.plan === 'free' ? FREE_PAGES_PER_24H : entitlement.pages_per_month;
+  const { pagesScannedInLast24Hours, oldestScanTs } = await getRolling24hUsage(siteId, env);
+  const remainingQuota = Math.max(0, dailyLimit - pagesScannedInLast24Hours);
+
+  if (remainingQuota === 0) {
+    const resetMs = oldestScanTs + 24 * 60 * 60 * 1000 - Date.now();
+    const hLeft   = Math.ceil(resetMs / (60 * 60 * 1000));
+    throw Object.assign(
+      new Error(`Your site was scanned recently. Please wait 24 hours before scanning again.`),
+      { status: 429, retryAfterHours: hLeft }
+    );
+  }
+
+  if (selectedPages.length > remainingQuota) {
+    throw Object.assign(
+      new Error(`Selection of ${selectedPages.length} pages exceeds your remaining daily quota of ${remainingQuota} page${remainingQuota !== 1 ? 's' : ''}.`),
+      { status: 429, remaining: remainingQuota }
     );
   }
 
@@ -235,6 +257,23 @@ export async function handleCancelJob(request, env, jobId) {
   return { cancelled: true, jobId };
 }
 
+// ── GET /api/scanner/quota ────────────────────────────────────────────────────
+
+export async function handleGetQuota(request, env) {
+  const { siteId } = request._claims;
+  const entitlement = await loadEntitlement(siteId, env);
+  const dailyLimit  = entitlement.plan === 'free' ? FREE_PAGES_PER_24H : entitlement.pages_per_month;
+  const { pagesScannedInLast24Hours, oldestScanTs } = await getRolling24hUsage(siteId, env);
+  const remainingQuota = Math.max(0, dailyLimit - pagesScannedInLast24Hours);
+
+  let resetsAt = null;
+  if (remainingQuota === 0 && oldestScanTs) {
+    resetsAt = new Date(oldestScanTs + 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  return { remainingQuota, dailyLimit, pagesScannedInLast24Hours, resetsAt };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatJobResponse(job, full) {
@@ -251,6 +290,20 @@ function formatJobResponse(job, full) {
   };
 }
 
+async function getRolling24hUsage(siteId, env) {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const rows = await env.DB.prepare(
+    `SELECT done_pages, finished_at FROM jobs
+     WHERE site_id = ? AND status = 'done' AND finished_at >= ?
+     ORDER BY finished_at ASC`
+  ).bind(siteId, cutoff).all();
+
+  const results = rows.results ?? [];
+  const pagesScannedInLast24Hours = results.reduce((sum, r) => sum + (r.done_pages ?? 0), 0);
+  const oldestScanTs = results.length > 0 ? new Date(results[0].finished_at).getTime() : null;
+  return { pagesScannedInLast24Hours, oldestScanTs };
+}
+
 async function loadEntitlement(siteId, env) {
   // Billing not wired yet — return a default permissive entitlement.
   // Replace this with a real DB lookup once billing is configured.
@@ -260,11 +313,11 @@ async function loadEntitlement(siteId, env) {
 
   if (row && row.status === 'active') return row;
 
-  // Default: no plan configured yet — allow unlimited
+  // Default: no plan configured yet
   return {
     plan:            'free',
     status:          'active',
-    pages_per_scan:  1000,
+    pages_per_scan:  10,
     pages_per_month: 10000,
   };
 }

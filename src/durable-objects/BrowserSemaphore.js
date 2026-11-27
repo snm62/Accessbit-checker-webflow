@@ -1,17 +1,4 @@
-/**
- * BrowserSemaphore Durable Object
- *
- * Controls access to the 10 Cloudflare Browser Rendering slots.
- * Reserves 8 for queue workers, 2 for single-page scans.
- * Cap: max 2 leases per site at once so one large site can't starve others.
- *
- * Usage:
- *   const id  = env.BROWSER_SEMAPHORE.idFromName('global');
- *   const stub = env.BROWSER_SEMAPHORE.get(id);
- *   const { leaseId } = await stub.acquire(siteId);
- *   // ... do browser work ...
- *   await stub.release(leaseId);
- */
+
 
 const MAX_LEASES   = 8;    // reserve 2 slots for single-page scans
 const MAX_PER_SITE = 2;    // fairness cap per site

@@ -30,13 +30,13 @@
 }
 
 .history-header-title {
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
 
 .history-header-sub {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -53,7 +53,7 @@
   background: rgba(198,244,50,0.08);
   border: 1px solid rgba(198,244,50,0.24);
   color: #D8F77A;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -125,7 +125,7 @@
 }
 
 .history-card-date {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -138,7 +138,7 @@
   border-radius: 999px;
   background: rgba(198,244,50,0.14);
   color: var(--green);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
@@ -146,7 +146,7 @@
 }
 
 .history-card-meta {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -198,8 +198,8 @@
 }
 
 .history-page-name {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -209,7 +209,7 @@
 
 .history-page-path {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
@@ -217,7 +217,7 @@
 }
 
 .history-page-issues {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
@@ -230,11 +230,23 @@
   width: 40px;
   height: 24px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.history-page-row--unscanned { opacity: 0.7; }
+.history-page-row--unscanned:hover { background: none; }
+
+.history-page-reason {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 .history-page-spinner {
@@ -255,7 +267,7 @@
   background: transparent;
   color: var(--muted);
   font-family: var(--font);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   display: flex;
   align-items: center;

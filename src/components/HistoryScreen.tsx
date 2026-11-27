@@ -12,11 +12,13 @@ interface ScanSummary {
 }
 
 interface HistoryEntry {
-  scanId: string;
+  scanId: string | null;
   pageUrl: string;
   scannedAt: string;
   durationMs: number;
-  summary: ScanSummary;
+  summary: ScanSummary | null;
+  status?: string;   // 'done' | 'failed' | 'skipped' | 'running' | 'queued'
+  error?: string | null;
 }
 
 interface FullScan extends HistoryEntry {
@@ -75,6 +77,19 @@ function pagePath(url: string): string {
 function siteHostname(url: string): string {
   try { return new URL(url).hostname; }
   catch { return ''; }
+}
+
+function pageStatusLabel(entry: HistoryEntry): string | null {
+  const s = entry.status ?? 'done';
+  if (s === 'done') return null;
+  if (s === 'skipped') {
+    const e = (entry.error ?? '').toLowerCase();
+    if (e.includes('password')) return 'Password protected';
+    if (e.includes('redirect')) return 'Redirected';
+    return 'Skipped';
+  }
+  if (s === 'failed') return entry.error ? `Failed: ${entry.error}` : 'Failed';
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 const ScoreRing: React.FC<{ score: number; isLatest: boolean }> = ({ score, isLatest }) => {
@@ -215,8 +230,11 @@ const HistoryScreen: React.FC<Props> = ({ makeAuthRequest, onBack, onViewScan })
         {visibleGroups.map((group, gi) => {
           const isLatest = gi === 0;
           const isOpen = openIdx === gi;
-          const avgScore = Math.round(group.pages.reduce((n, p) => n + (p.summary?.score ?? 0), 0) / group.pages.length);
-          const totalIssues = group.pages.reduce((n, p) => n + (p.summary?.total ?? 0), 0);
+          const scannedPages = group.pages.filter(p => (p.status ?? 'done') === 'done' && p.summary);
+          const avgScore = scannedPages.length > 0
+            ? Math.round(scannedPages.reduce((n, p) => n + (p.summary!.score ?? 0), 0) / scannedPages.length)
+            : 0;
+          const totalIssues = scannedPages.reduce((n, p) => n + (p.summary?.total ?? 0), 0);
           const totalDuration = group.pages.reduce((n, p) => n + (p.durationMs ?? 0), 0);
           const dur = formatDuration(totalDuration);
 
@@ -235,7 +253,7 @@ const HistoryScreen: React.FC<Props> = ({ makeAuthRequest, onBack, onViewScan })
                     {isLatest && <span className="history-latest-badge">Latest</span>}
                   </span>
                   <span className="history-card-meta">
-                    {group.pages.length} page{group.pages.length !== 1 ? 's' : ''} · {totalIssues} issue{totalIssues !== 1 ? 's' : ''}
+                    {scannedPages.length} page{scannedPages.length !== 1 ? 's' : ''} · {totalIssues} issue{totalIssues !== 1 ? 's' : ''}
                     {dur ? ` · ${dur}` : ''}
                   </span>
                 </span>
@@ -246,32 +264,43 @@ const HistoryScreen: React.FC<Props> = ({ makeAuthRequest, onBack, onViewScan })
 
               {isOpen && (
                 <div className="history-card-pages">
-                  {group.pages.map((p, pi) => (
-                    <button
-                      key={p.scanId}
-                      type="button"
-                      className={`history-page-row${pi === group.pages.length - 1 ? ' history-page-row--last' : ''}`}
-                      onClick={() => handleViewPage(p.scanId)}
-                      disabled={loadingId === p.scanId}
-                    >
-                      <span className="history-page-label">
-                        <span className="history-page-name">{pageLabel(p.pageUrl)}</span>
-                        <span className="history-page-path">{pagePath(p.pageUrl)}</span>
-                      </span>
-                      <span className="history-page-issues">{p.summary?.total ?? 0} issues</span>
-                      <span className="history-score-pill" style={scorePillStyle(p.summary?.score ?? 0)}>
-                        {p.summary?.score ?? '—'}
-                      </span>
-                      {loadingId === p.scanId
-                        ? <span className="history-page-spinner" />
-                        : (
-                          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8C8599" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M9 6l6 6-6 6"/>
-                          </svg>
-                        )
-                      }
-                    </button>
-                  ))}
+                  {group.pages.map((p, pi) => {
+                    const isScanned = (p.status ?? 'done') === 'done' && p.scanId;
+                    const reasonLabel = pageStatusLabel(p);
+                    return (
+                      <button
+                        key={p.scanId ?? `${p.pageUrl}-${pi}`}
+                        type="button"
+                        className={`history-page-row${pi === group.pages.length - 1 ? ' history-page-row--last' : ''}${!isScanned ? ' history-page-row--unscanned' : ''}`}
+                        onClick={() => isScanned ? handleViewPage(p.scanId!) : undefined}
+                        disabled={!isScanned || loadingId === p.scanId}
+                        style={!isScanned ? { cursor: 'default' } : undefined}
+                      >
+                        <span className="history-page-label">
+                          <span className="history-page-name">{pageLabel(p.pageUrl)}</span>
+                          <span className="history-page-path">{pagePath(p.pageUrl)}</span>
+                        </span>
+                        {isScanned ? (
+                          <>
+                            <span className="history-page-issues">{p.summary?.total ?? 0} issues</span>
+                            <span className="history-score-pill" style={scorePillStyle(p.summary?.score ?? 0)}>
+                              {p.summary?.score ?? '—'}
+                            </span>
+                            {loadingId === p.scanId
+                              ? <span className="history-page-spinner" />
+                              : (
+                                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8C8599" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M9 6l6 6-6 6"/>
+                                </svg>
+                              )
+                            }
+                          </>
+                        ) : (
+                          <span className="history-page-reason">{reasonLabel}</span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </section>

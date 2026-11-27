@@ -1,4 +1,4 @@
-import { handleAuthorize, handleCallback, handleMe, getStoredAuth } from './auth/oauth.js';
+﻿import { handleAuthorize, handleCallback, handleMe, getStoredAuth } from './auth/oauth.js';
 import { handleDesignerToken } from './auth/designerToken.js';
 import { verifySessionToken } from './auth/jwt.js';
 import { runScan } from './scanner.js';
@@ -49,7 +49,7 @@ export default {
     const reqId = crypto.randomUUID().slice(0, 8);
 
     try {
-      // ── Auth routes (no session required) ────────────────────────────────────
+      // ΓöÇΓöÇ Auth routes (no session required) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
       if (pathname === '/oauth/install' && method === 'GET') {
         return handleAuthorize(request, env);
@@ -64,7 +64,7 @@ export default {
         return withCors(await handleDesignerToken(request, env), cors);
       }
 
-      // ── Protected routes ─────────────────────────────────────────────────────
+      // ΓöÇΓöÇ Protected routes ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
       if (pathname === '/api/scanner/auth/me' && method === 'GET') {
         const req = await requireSession(request, env);
@@ -106,7 +106,7 @@ export default {
         return withCors(jsonResponse({ pages, domains }), cors);
       }
 
-      // ── Queue-backed job routes ───────────────────────────────────────────────
+      // ΓöÇΓöÇ Queue-backed job routes ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
       if (pathname === '/api/scanner/jobs' && method === 'POST') {
         const req = await requireSession(request, env);
@@ -140,12 +140,30 @@ export default {
         return handleGetPageResult(req, env, pageResultMatch[1], pageResultMatch[2]);
       }
 
-      // ── Scan history ─────────────────────────────────────────────────────────
+      // ΓöÇΓöÇ Scan history ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
       if (pathname === '/api/scanner/history' && method === 'GET') {
         const req = await requireSession(request, env);
         const raw = await env.TOKENS.get(`scanner:history:${req._claims.siteId}`);
-        return withCors(jsonResponse({ entries: raw ? JSON.parse(raw) : [] }), cors);
+        const stored = raw ? JSON.parse(raw) : [];
+        // Normalize: job entries have { jobId, scannedAt, pages: [] }
+        // Single-page entries have { scanId, pageUrl, scannedAt, ... }
+        // Flatten job entries so the client always gets flat HistoryEntry objects.
+        const entries = stored.flatMap(item => {
+          if (item.pages && Array.isArray(item.pages)) {
+            return item.pages.map(p => ({
+              scanId:     p.scanId   ?? null,
+              pageUrl:    p.pageUrl  ?? '',
+              scannedAt:  item.scannedAt,
+              durationMs: p.durationMs ?? 0,
+              summary:    p.summary  ?? null,
+              status:     p.status   ?? 'done',
+              error:      p.error    ?? null,
+            }));
+          }
+          return [item];
+        });
+        return withCors(jsonResponse({ entries }), cors);
       }
 
       if (pathname.startsWith('/api/scanner/history/') && method === 'GET') {
@@ -160,7 +178,7 @@ export default {
         return withCors(jsonResponse(scan), cors);
       }
 
-      // ── Health ───────────────────────────────────────────────────────────────
+      // ΓöÇΓöÇ Health ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
       if (pathname === '/health') {
         return withCors(jsonResponse({ status: 'ok', version: '3.0.0' }), cors);
@@ -184,18 +202,18 @@ export default {
     }
   },
 
-  // ── Queue consumer ────────────────────────────────────────────────────────────
+  // ΓöÇΓöÇ Queue consumer ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   async queue(batch, env) {
     return handleQueue(batch, env);
   },
 
-  // ── Cron trigger ─────────────────────────────────────────────────────────────
+  // ΓöÇΓöÇ Cron trigger ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   async scheduled(event, env, ctx) {
     ctx.waitUntil(handleCron(event, env));
   },
 };
 
-// ── Scan history ──────────────────────────────────────────────────────────────
+// ΓöÇΓöÇ Scan history ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 async function saveScanToHistory(result, siteId, env) {
   try {
@@ -214,7 +232,7 @@ async function saveScanToHistory(result, siteId, env) {
   }
 }
 
-// ── Rate limiting (single-page scans only) ────────────────────────────────────
+// ΓöÇΓöÇ Rate limiting (single-page scans only) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 async function checkRateLimit(siteId, env) {
   const DAILY_LIMIT = 500;
@@ -231,7 +249,7 @@ async function checkRateLimit(siteId, env) {
   await env.TOKENS.put(key, String(count + 1), { expirationTtl: 60 * 60 * 25 });
 }
 
-// ── Session middleware ────────────────────────────────────────────────────────
+// ΓöÇΓöÇ Session middleware ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 async function requireSession(request, env) {
   const authHeader = request.headers.get('Authorization') ?? '';
@@ -243,14 +261,14 @@ async function requireSession(request, env) {
   });
 
   const stored = await getStoredAuth(claims.siteId, env);
-  if (!stored) throw Object.assign(new Error('Session not found — please reconnect'), { status: 401 });
+  if (!stored) throw Object.assign(new Error('Session not found ΓÇö please reconnect'), { status: 401 });
 
   request._claims      = claims;
   request._accessToken = stored.accessToken;
   return request;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ΓöÇΓöÇ Helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {

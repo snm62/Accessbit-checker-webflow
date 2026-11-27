@@ -1,4 +1,4 @@
--- Run with: wrangler d1 execute accessibility-checker-db --file=src/db/schema.sql
+
 
 -- Entitlements (populated by billing webhooks — insert a free row at install)
 CREATE TABLE IF NOT EXISTS entitlements (

@@ -21,8 +21,10 @@ function hasStoredAuth(): boolean {
 const App: React.FC = () => {
   const { isAuthenticated, isLoading, siteInfo, authorize, makeAuthRequest, logout } = useAuth();
   const [screen, setScreen] = useState<Screen>(() => hasStoredAuth() ? 'scanner' : 'welcome');
+  const [previousScreen, setPreviousScreen] = useState<Screen>('scanner');
   const [siteResults, setSiteResults] = useState<PageScanResult[] | null>(null);
   const [scanDurationMs, setScanDurationMs] = useState<number | undefined>(undefined);
+  const [isScanning, setIsScanning] = useState(false);
 
   useEffect(() => {
     try { webflow.setExtensionSize('large'); } catch {}
@@ -35,8 +37,33 @@ const App: React.FC = () => {
   }, [isAuthenticated]);
 
   const handleScanComplete = (results: PageScanResult[], meta?: { durationMs: number }) => {
-    setSiteResults(results);
+    // Deduplicate site-level rules (e.g. html-has-lang applies to the whole site,
+    // not each page individually) — keep only the first occurrence across all pages.
+    const SITE_LEVEL_RULES = new Set(['html-has-lang', 'html-xml-lang-mismatch', 'html-lang-valid']);
+    const seenSiteRules = new Set<string>();
+    const deduped = results.map(r => {
+      if (!r.issues?.length) return r;
+      const filtered = r.issues.filter(issue => {
+        if (!SITE_LEVEL_RULES.has(issue.rule)) return true;
+        if (seenSiteRules.has(issue.rule)) return false;
+        seenSiteRules.add(issue.rule);
+        return true;
+      });
+      if (filtered.length === r.issues.length) return r;
+      const removedCount = r.issues.length - filtered.length;
+      return {
+        ...r,
+        issues: filtered,
+        summary: r.summary ? {
+          ...r.summary,
+          total: Math.max(0, (r.summary.total ?? 0) - removedCount),
+        } : r.summary,
+      };
+    });
+    setSiteResults(deduped);
     setScanDurationMs(meta?.durationMs);
+    setIsScanning(false);
+    setPreviousScreen('scanner');
     setScreen('site-results');
   };
 
@@ -64,6 +91,8 @@ const App: React.FC = () => {
         results={siteResults}
         siteName={siteInfo?.siteName ?? ''}
         scanDurationMs={scanDurationMs}
+        isScanning={isScanning}
+        onBack={() => setScreen(previousScreen)}
         onRescan={() => setScreen('scanner')}
         onHistory={() => setScreen('history')}
       />
@@ -76,6 +105,7 @@ const App: React.FC = () => {
         makeAuthRequest={makeAuthRequest}
         onBack={() => setScreen('scanner')}
         onViewScan={(issues, pageUrl) => {
+          setPreviousScreen('history');
           // History still shows single-page results for now — wrap in a PageScanResult
           setSiteResults([{
             page: { pageId: '', title: pageUrl, slug: '', path: '', url: pageUrl, isCmsTemplate: false, collectionId: null, parentId: null },
@@ -103,6 +133,7 @@ const App: React.FC = () => {
     <ScannerScreen
       siteInfo={siteInfo}
       onScanComplete={handleScanComplete}
+      onScanningChange={setIsScanning}
       makeAuthRequest={makeAuthRequest}
       onLogout={handleLogout}
       onHistory={() => setScreen('history')}

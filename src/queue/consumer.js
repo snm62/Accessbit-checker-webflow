@@ -5,7 +5,7 @@
  * Message format: { jobId: string, pageIds: string[] }
  */
 
-import { runScan } from '../scanner.js';
+import { runScan, launchBrowser, runScanOnPage } from '../scanner.js';
 import { getStoredAuth } from '../auth/oauth.js';
 import { getAllowedDomains } from '../lib/domains.js';
 import { acquireBrowserSlot, releaseBrowserSlot } from '../durable-objects/BrowserSemaphore.js';
@@ -22,9 +22,7 @@ export async function handleQueue(batch, env) {
 }
 
 async function handleScanBatch(batch, env) {
-  for (const message of batch.messages) {
-    await processScanMessage(message, env);
-  }
+  await Promise.allSettled(batch.messages.map(msg => processScanMessage(msg, env)));
 }
 
 async function processScanMessage(message, env) {
@@ -69,18 +67,25 @@ async function processScanMessage(message, env) {
   let leaseId = null;
   const slot = await acquireBrowserSlot(env, job.site_id);
   if (!slot.acquired) {
-    // No slot — retry after delay (does not count as a failed attempt)
-    message.retry({ delaySeconds: 30 });
+    // No slot available — ack this message and re-enqueue with a delay so we
+    // don't burn the message's retry budget (which is reserved for real scan
+    // failures that should eventually go to the DLQ).
+    await env.SCAN_QUEUE.send({ jobId, pageIds }, { delaySeconds: 30 });
+    message.ack();
     return;
   }
   leaseId = slot.leaseId;
 
+  // Launch one browser for all pages in this batch message — avoids the
+  // ~5-10s startup cost per page that made large concurrent scans slow.
+  let browser;
   try {
-    // Launch one browser for the whole batch
+    browser = await launchBrowser(env);
     for (const p of pages) {
-      await processOnePage(p, job, allowlist, stored.accessToken, env);
+      await processOnePage(p, job, allowlist, stored.accessToken, env, browser);
     }
   } finally {
+    if (browser) await browser.close().catch(() => {});
     await releaseBrowserSlot(env, leaseId);
   }
 
@@ -88,7 +93,7 @@ async function processScanMessage(message, env) {
   message.ack();
 }
 
-async function processOnePage(pageRow, job, allowlist, accessToken, env) {
+async function processOnePage(pageRow, job, allowlist, accessToken, env, browser) {
   const { job_id, page_id, url, is_cms } = pageRow;
 
   // Validate domain is still allowed
@@ -112,12 +117,9 @@ async function processOnePage(pageRow, job, allowlist, accessToken, env) {
   if (!claim.meta.changes) return; // already claimed or max attempts reached
 
   try {
-    const result = await runScan({
-      siteId:  job.site_id,
-      pageUrl: url,
-      pageId:  page_id,
-      env,
-    });
+    const result = await (browser
+      ? runScanOnPage({ browser, siteId: job.site_id, pageUrl: url, pageId: page_id, env })
+      : runScan({ siteId: job.site_id, pageUrl: url, pageId: page_id, env }));
 
     // Write full result to R2
     const r2Key = `results/${job.site_id}/${job_id}/${page_id}.json`;
@@ -125,18 +127,22 @@ async function processOnePage(pageRow, job, allowlist, accessToken, env) {
       httpMetadata: { contentType: 'application/json' },
     });
 
-    // Write summary + issues to D1 and mark done
+    // Write summary + issues to D1 and mark done.
+    // Strip the 'html' field from issues to keep summary_json small (full HTML is already in R2).
+    const slimIssues = (result.issues ?? []).map(({ html, ...rest }) => rest);
     await env.DB.prepare(
       `UPDATE job_pages
          SET status = 'done', summary_json = ?, r2_key = ?, error = NULL, updated_at = datetime('now')
        WHERE job_id = ? AND page_id = ? AND status = 'running'`
-    ).bind(JSON.stringify({ ...result.summary, issues: result.issues ?? [] }), r2Key, job_id, page_id).run();
+    ).bind(JSON.stringify({ ...result.summary, issues: slimIssues }), r2Key, job_id, page_id).run();
 
     await bumpJobCounter(job_id, 'done_pages', env);
 
   } catch (err) {
     const isSkippable = err.status === 422;
     const reason = err.message ?? 'Scan failed';
+
+    console.error(`[processOnePage] FAILED job=${job_id} page=${page_id} url=${pageRow.url} error=${reason}`, err.stack ?? '');
 
     if (isSkippable) {
       await env.DB.prepare(
@@ -151,7 +157,10 @@ async function processOnePage(pageRow, job, allowlist, accessToken, env) {
   }
 }
 
+const BUMP_COLUMN_ALLOWLIST = new Set(['done_pages', 'failed_pages', 'skipped_pages']);
+
 async function bumpJobCounter(jobId, column, env) {
+  if (!BUMP_COLUMN_ALLOWLIST.has(column)) throw new Error(`Invalid counter column: ${column}`);
   await env.DB.prepare(
     `UPDATE jobs SET ${column} = ${column} + 1, started_at = COALESCE(started_at, datetime('now'))
      WHERE job_id = ? AND status IN ('queued','running')`
@@ -187,16 +196,18 @@ async function maybeFinishJob(jobId, env) {
     ).bind(job.done_pages, job.reserved_pages, job.site_id),
   ]);
 
-  if (finalStatus === 'done') {
+  if (job.done_pages > 0) {
     await writeJobToHistory(jobId, job.site_id, env);
   }
 }
 
+const SITE_LEVEL_RULES = new Set(['html-has-lang', 'html-xml-lang-mismatch', 'html-lang-valid']);
+
 async function writeJobToHistory(jobId, siteId, env) {
   try {
     const rows = await env.DB.prepare(
-      `SELECT page_id, url, title, summary_json, updated_at FROM job_pages
-       WHERE job_id = ? AND status = 'done' ORDER BY updated_at`
+      `SELECT page_id, url, title, status, summary_json, error, updated_at FROM job_pages
+       WHERE job_id = ? ORDER BY updated_at`
     ).bind(jobId).all();
 
     const historyKey = `scanner:history:${siteId}`;
@@ -204,22 +215,50 @@ async function writeJobToHistory(jobId, siteId, env) {
     const history = historyRaw ? JSON.parse(historyRaw) : [];
 
     const scannedAt = new Date().toISOString();
+    const seenSiteRules = new Set();
 
+    const jobPages = [];
     for (const p of rows.results ?? []) {
-      const summary = p.summary_json ? JSON.parse(p.summary_json) : {};
-      const { issues, ...summaryOnly } = summary;
-      const scanId = `${siteId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      if (p.status === 'done') {
+        const summary = p.summary_json ? JSON.parse(p.summary_json) : {};
+        const { issues, ...summaryOnly } = summary;
 
-      await env.TOKENS.put(`scanner:scan:${scanId}`, JSON.stringify({
-        scanId, siteId, pageUrl: p.url, scannedAt, durationMs: 0,
-        summary: summaryOnly, issues: issues ?? [],
-      }), { expirationTtl: 60 * 60 * 24 * 30 });
+        // Apply same site-level rule deduplication as the frontend ResultsScreen
+        let dedupedTotal = summaryOnly.total ?? 0;
+        if (Array.isArray(issues) && issues.length) {
+          let removedCount = 0;
+          for (const issue of issues) {
+            if (SITE_LEVEL_RULES.has(issue.rule)) {
+              if (seenSiteRules.has(issue.rule)) {
+                removedCount++;
+              } else {
+                seenSiteRules.add(issue.rule);
+              }
+            }
+          }
+          dedupedTotal = Math.max(0, dedupedTotal - removedCount);
+        }
+        const adjustedSummary = { ...summaryOnly, total: dedupedTotal };
 
-      history.unshift({ scanId, pageUrl: p.url, scannedAt, durationMs: 0, summary: summaryOnly });
+        const scanId = `${siteId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+        await env.TOKENS.put(`scanner:scan:${scanId}`, JSON.stringify({
+          scanId, siteId, pageUrl: p.url, scannedAt, durationMs: 0,
+          summary: adjustedSummary, issues: issues ?? [],
+        }), { expirationTtl: 60 * 60 * 24 * 30 });
+
+        jobPages.push({ scanId, pageUrl: p.url, durationMs: 0, summary: adjustedSummary, status: 'done' });
+      } else {
+        // Failed/skipped pages — record status and reason, no scanId (not viewable)
+        jobPages.push({ pageUrl: p.url, status: p.status, error: p.error ?? null });
+      }
     }
 
-    if (history.length > 50) history.splice(50);
-    await env.TOKENS.put(historyKey, JSON.stringify(history));
+    if (jobPages.length > 0) {
+      history.unshift({ jobId, scannedAt, pages: jobPages });
+      if (history.length > 50) history.splice(50);
+      await env.TOKENS.put(historyKey, JSON.stringify(history));
+    }
   } catch (err) {
     console.error('Failed to write job history:', err.message);
   }

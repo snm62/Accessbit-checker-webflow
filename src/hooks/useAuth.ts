@@ -120,7 +120,7 @@ export function useAuth(): AuthState {
         return true;
       }
     } catch {
-      // webflow API may not be available outside designer
+     
     }
     return false;
   };
@@ -129,8 +129,7 @@ export function useAuth(): AuthState {
     (async () => {
       setIsLoading(true);
 
-      // R4: If localStorage has siteInfo but it belongs to a different site than
-      // the currently-open one, discard the cache — it was left by a previous site.
+    
       const stored = readStoredSiteInfo();
       if (stored) {
         let currentSiteId: string | null = null;
@@ -156,7 +155,10 @@ export function useAuth(): AuthState {
   const authorize = () => {
     // S3: state is now minted server-side; we pass siteId so it can be embedded in the state
     const siteId = siteInfo?.siteId;
-    const authUrl = `${WORKER_BASE_URL}/api/scanner/auth/authorize${siteId ? `?siteId=${siteId}` : ''}`;
+
+    // Mint a one-time nonce to bind this exact popup to this handler
+    const nonce = crypto.randomUUID();
+    const authUrl = `${WORKER_BASE_URL}/api/scanner/auth/authorize?nonce=${nonce}${siteId ? `&siteId=${siteId}` : ''}`;
 
     const authWin = window.open(authUrl, 'wf-scanner-auth', 'width=600,height=700,left=200,top=100');
 
@@ -167,9 +169,9 @@ export function useAuth(): AuthState {
 
     // Listen for postMessage from popup (AccessBit pattern)
     const handleMessage = async (event: MessageEvent) => {
-      // Validate: must come from our worker origin
+      // Validate origin: must come from our worker
       if (!event.origin || event.origin !== workerOrigin) return;
-      // Validate: must be our popup window
+      // Validate source: must come from the exact popup window we opened
       if (event.source !== authWin) return;
       // S4: popup now posts AUTH_COMPLETE only — no token through postMessage
       if (!event.data || event.data.type !== 'AUTH_COMPLETE') return;
@@ -179,16 +181,13 @@ export function useAuth(): AuthState {
       window.clearInterval(pollRef.current!);
       pollRef.current = null;
 
-      // Session comes from designer-token (called inside attemptAuth)
+      
       await attemptAuth();
     };
 
     window.addEventListener('message', handleMessage, true);
 
-    // Poll for window close OR periodic auth check.
-    // In Webflow Designer, window.open may produce a full tab rather than a popup,
-    // so we can't rely solely on authWin.closed — also retry auth every 3 s so the
-    // extension activates as soon as the OAuth redirect lands back in the Designer.
+ 
     let pollCount = 0;
     pollRef.current = window.setInterval(async () => {
       pollCount++;

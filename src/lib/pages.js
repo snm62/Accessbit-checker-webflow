@@ -1,7 +1,3 @@
-/**
- * listSitePages — fetch all scannable pages for a site from the Webflow Data API.
- * Shared by worker.js (pages endpoint) and routes/jobs.js (job creation).
- */
 
 import { getAllowedDomains } from './domains.js';
 
@@ -70,14 +66,15 @@ export async function listSitePages(siteId, accessToken, env, selectedDomain = n
         }
         const pageUrl = baseDomain ? `https://${baseDomain}${path}` : null;
         return {
-          pageId:        p.id,
-          title:         p.title ?? p.slug ?? '',
-          slug:          p.slug ?? '',
+          pageId:            p.id,
+          title:             p.title ?? p.slug ?? '',
+          slug:              p.slug ?? '',
           path,
-          url:           pageUrl,
-          isCmsTemplate: !!p.collectionId,
-          collectionId:  p.collectionId ?? null,
-          parentId:      p.parentId ?? null,
+          url:               pageUrl,
+          isCmsTemplate:     !!p.collectionId,
+          collectionId:      p.collectionId ?? null,
+          parentId:          p.parentId ?? null,
+          passwordProtected: !!(p.password || p.requiresAuth),
         };
       })
       .filter(p => p.url),

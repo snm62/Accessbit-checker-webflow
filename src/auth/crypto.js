@@ -1,9 +1,4 @@
-/**
- * AES-GCM encryption for KV-stored Webflow access tokens (S9).
- *
- * Requires TOKEN_ENC_KEY secret — a 64-char hex string (32 bytes).
- * Set it with: npx wrangler secret put TOKEN_ENC_KEY
- */
+
 
 function hexToBytes(hex) {
   const bytes = new Uint8Array(hex.length / 2);
@@ -24,7 +19,7 @@ async function importKey(keyHex) {
 }
 
 export async function encryptPayload(plaintext, env) {
-  if (!env.TOKEN_ENC_KEY) return plaintext; // graceful no-op if secret not set
+  if (!env.TOKEN_ENC_KEY) throw new Error('TOKEN_ENC_KEY secret is not configured');
   const key = await importKey(env.TOKEN_ENC_KEY);
   const iv  = crypto.getRandomValues(new Uint8Array(12));
   const enc = await crypto.subtle.encrypt(
@@ -40,7 +35,7 @@ export async function encryptPayload(plaintext, env) {
 }
 
 export async function decryptPayload(ciphertext, env) {
-  if (!env.TOKEN_ENC_KEY) return ciphertext; // graceful no-op
+  if (!env.TOKEN_ENC_KEY) throw new Error('TOKEN_ENC_KEY secret is not configured');
   try {
     const bytes = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0));
     const iv    = bytes.slice(0, 12);
@@ -49,7 +44,6 @@ export async function decryptPayload(ciphertext, env) {
     const dec   = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
     return new TextDecoder().decode(dec);
   } catch {
-    // Key rotation: if decryption fails, try treating as plaintext (old record)
-    return ciphertext;
+    return null;
   }
 }

@@ -19,15 +19,18 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid var(--border);
 }
 .site-results-header-info {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
 .site-results-header-title {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -59,7 +62,7 @@
   background: var(--green);
   color: var(--bg);
   border: none;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
   display: flex;
@@ -111,13 +114,13 @@
   justify-content: center;
 }
 .site-score-ring-num {
-  font-size: 38px;
+  font-size: 40px;
   font-weight: 300;
   letter-spacing: -0.04em;
   line-height: 1;
 }
 .site-score-ring-sub {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.12em;
   color: var(--muted);
@@ -139,12 +142,12 @@
   flex-wrap: wrap;
 }
 .site-score-issues {
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 400;
   letter-spacing: -0.02em;
 }
 .site-score-subtext {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -288,7 +291,7 @@
   gap: 3px;
 }
 .site-page-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -296,7 +299,7 @@
 }
 .site-page-path {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
@@ -317,7 +320,7 @@
   line-height: 1;
 }
 .site-page-count-sub {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -341,7 +344,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: -0.02em;
 }

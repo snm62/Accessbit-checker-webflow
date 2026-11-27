@@ -5,6 +5,7 @@ import '../styles/scannerscreen.css';
 interface Props {
   siteInfo: SiteInfo | null;
   onScanComplete: (pageScanResults: PageScanResult[], meta?: { durationMs: number }) => void;
+  onScanningChange?: (scanning: boolean) => void;
   makeAuthRequest: (path: string, init?: RequestInit) => Promise<Response>;
   onLogout: () => void;
   onHistory: () => void;
@@ -19,6 +20,7 @@ export interface SitePage {
   isCmsTemplate: boolean;
   collectionId: string | null;
   parentId: string | null;
+  passwordProtected?: boolean;
 }
 
 export interface ScanResult {
@@ -75,6 +77,14 @@ interface JobStatus {
 }
 
 const POLL_INTERVAL_MS = 4000;
+const MAX_PAGES_PER_SCAN = 10;
+
+interface QuotaInfo {
+  remainingQuota: number;
+  dailyLimit: number;
+  pagesScannedInLast24Hours: number;
+  resetsAt: string | null;
+}
 
 /* ── Score ring (SVG) ───────────────────────────────────────────────────── */
 const ScanRing: React.FC<{ done: number; total: number }> = ({ done, total }) => {
@@ -114,11 +124,16 @@ const ScanRing: React.FC<{ done: number; total: number }> = ({ done, total }) =>
 };
 
 /* ── Main component ─────────────────────────────────────────────────────── */
-const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequest, onLogout, onHistory }) => {
+const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, onScanningChange, makeAuthRequest, onLogout, onHistory }) => {
   const [pages, setPages] = useState<SitePage[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pagesLoading, setPagesLoading] = useState(false);
   const [pagesError, setPagesError] = useState<string | null>(null);
+
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
+  const [quotaLoading, setQuotaLoading] = useState(false);
+
+  const [pageSearch, setPageSearch] = useState('');
 
   const [activeJob, setActiveJob] = useState<JobStatus | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
@@ -131,10 +146,20 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
   useEffect(() => {
     if (!siteInfo?.siteId) return;
     fetchPages();
+    fetchQuota();
     checkActiveJob();
   }, [siteInfo?.siteId]);
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  const fetchQuota = useCallback(() => {
+    setQuotaLoading(true);
+    makeAuthRequest('/api/scanner/quota')
+      .then(res => res.ok ? (res.json() as Promise<QuotaInfo>) : Promise.reject())
+      .then(data => setQuota(data))
+      .catch(() => {})
+      .finally(() => setQuotaLoading(false));
+  }, [makeAuthRequest]);
 
   function fetchPages() {
     if (!siteInfo?.siteId) return;
@@ -150,7 +175,11 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
       )
       .then(data => {
         setPages(data.pages);
-        setSelectedIds(new Set(data.pages.map((p: SitePage) => p.pageId)));
+        // Pre-select up to remainingQuota pages (falls back to MAX_PAGES_PER_SCAN if quota not yet loaded)
+        setSelectedIds(prev => {
+          const cap = Math.min(MAX_PAGES_PER_SCAN, data.pages.length);
+          return new Set(data.pages.slice(0, cap).map((p: SitePage) => p.pageId));
+        });
       })
       .catch((err: Error) => setPagesError(err.message))
       .finally(() => setPagesLoading(false));
@@ -211,14 +240,17 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
           onScanComplete(results, { durationMs });
         }
         if (job.status === 'failed') setScanError('The scan failed. Check individual page results.');
+        // Refresh quota so the counter reflects pages just consumed
+        fetchQuota();
       }
     } catch {}
-  }, [pages, makeAuthRequest, onScanComplete]);
+  }, [pages, makeAuthRequest, onScanComplete, fetchQuota]);
 
   const startScan = async () => {
     if (!selectedIds.size || isScanning || scanLoading) return;
     setScanError(null);
     setScanLoading(true);
+    onScanningChange?.(true);
     scanStartRef.current = null;
     try {
       const res = await makeAuthRequest('/api/scanner/jobs', {
@@ -234,6 +266,7 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
         } else setScanError(data.error || 'A scan is already running.');
         return;
       }
+      if (res.status === 429) { setScanError(data.error || 'Please wait before scanning again.'); return; }
       if (res.status === 402) { setScanError(data.error || 'Quota exceeded.'); return; }
       if (!res.ok) { setScanError(data.error || `Failed to start scan (${res.status}).`); return; }
       const job: JobStatus = { jobId: data.jobId, status: 'queued', totalPages: data.total, donePages: 0, failedPages: 0, skippedPages: 0, createdAt: new Date().toISOString(), startedAt: null, finishedAt: null };
@@ -255,19 +288,29 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
     } catch {}
   };
 
+  const effectiveCap = Math.min(MAX_PAGES_PER_SCAN, quota?.remainingQuota ?? MAX_PAGES_PER_SCAN);
+
   const togglePage = (pageId: string) => {
     if (isScanning) return;
     setSelectedIds(prev => {
       const next = new Set(prev);
-      next.has(pageId) ? next.delete(pageId) : next.add(pageId);
+      if (next.has(pageId)) {
+        next.delete(pageId);
+      } else if (next.size < effectiveCap) {
+        next.add(pageId);
+      }
       return next;
     });
   };
 
-  const allSelected = pages.length > 0 && selectedIds.size === pages.length;
+  const allSelected = pages.length > 0 && selectedIds.size === Math.min(pages.length, effectiveCap);
   const toggleAll = () => {
     if (isScanning) return;
-    setSelectedIds(allSelected ? new Set() : new Set(pages.map(p => p.pageId)));
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(pages.slice(0, effectiveCap).map(p => p.pageId)));
+    }
   };
 
   const scanProgress = activeJob ? activeJob.donePages + activeJob.failedPages + activeJob.skippedPages : 0;
@@ -275,13 +318,15 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
   const progressPct  = scanTotal > 0 ? Math.round((scanProgress / scanTotal) * 100) : 0;
 
   const timeRemainingLabel = (() => {
-    if (!scanStartRef.current || scanProgress === 0 || scanTotal === 0) return '';
+    if (!scanStartRef.current || scanTotal === 0) return '';
+    if (scanProgress === 0) return 'Calculating…';
     const elapsed = Date.now() - scanStartRef.current;
     const perPage = elapsed / scanProgress;
     const remaining = Math.round((scanTotal - scanProgress) * perPage / 1000);
     if (remaining <= 0) return '';
-    if (remaining < 60) return `About ${remaining}s left`;
-    return `About ${Math.round(remaining / 60)}m left`;
+    if (remaining < 60) return `~${remaining}s left`;
+    const m = Math.floor(remaining / 60), s = remaining % 60;
+    return s > 0 ? `~${m}m ${s}s left` : `~${m}m left`;
   })();
 
   /* ── Shared header ─────────────────────────────────────────────────────── */
@@ -345,11 +390,9 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
             </div>
             <div className="progress-meta">
               <span>{progressPct}% complete</span>
-              {activeJob?.failedPages > 0
-                ? <span style={{ color: 'var(--red-text)' }}>{activeJob.failedPages} failed</span>
-                : timeRemainingLabel
-                  ? <span style={{ color: '#A49DB1' }}>{timeRemainingLabel}</span>
-                  : null
+              {timeRemainingLabel
+                ? <span style={{ color: '#A49DB1' }}>{timeRemainingLabel}</span>
+                : null
               }
             </div>
           </div>
@@ -470,6 +513,25 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
 
         {!pagesLoading && !pagesError && pages.length > 0 && (
           <div className="pages-panel">
+            <div className="pages-search-wrap">
+              <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/>
+              </svg>
+              <input
+                type="text"
+                className="pages-search-input"
+                placeholder="Search pages…"
+                value={pageSearch}
+                onChange={e => setPageSearch(e.target.value)}
+                disabled={isScanning}
+                aria-label="Search pages"
+              />
+              {pageSearch && (
+                <button type="button" className="pages-search-clear" onClick={() => setPageSearch('')} aria-label="Clear search">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              )}
+            </div>
             <div className="pages-panel-header">
               <div className="pages-panel-header-left">
                 <input
@@ -482,30 +544,49 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
                 <span className="pages-panel-title">PAGES TO SCAN</span>
               </div>
               <span className="pages-count-badge">
-                <span className="pages-count-selected">{selectedIds.size} / {pages.length} selected</span>
+                <span className="pages-count-selected">
+                  {quota
+                    ? `Selected: ${selectedIds.size} / ${quota.remainingQuota} pages remaining today`
+                    : `${selectedIds.size} / ${MAX_PAGES_PER_SCAN} pages`}
+                </span>
               </span>
             </div>
             <div className="pages-list">
-              {pages.map(p => {
-                const checked = selectedIds.has(p.pageId);
-                return (
-                  <label
-                    key={p.pageId}
-                    className="page-row"
-                    onClick={() => togglePage(p.pageId)}
-                  >
-                    <input
-                      type="checkbox"
-                      className="page-checkbox"
-                      checked={checked}
-                      onChange={() => togglePage(p.pageId)}
-                      aria-label={`Select ${p.title}`}
-                    />
-                    <span className="page-title">{p.title}</span>
-                    {p.path && <span className="page-path">{p.path}</span>}
-                  </label>
-                );
-              })}
+              {(() => {
+                const q = pageSearch.trim().toLowerCase();
+                const filtered = q
+                  ? pages.filter(p =>
+                      p.title.toLowerCase().includes(q) ||
+                      p.path.toLowerCase().includes(q)
+                    )
+                  : pages;
+                if (filtered.length === 0 && q) {
+                  return (
+                    <div className="pages-search-empty">No pages match "{pageSearch}"</div>
+                  );
+                }
+                return filtered.map(p => {
+                  const checked = selectedIds.has(p.pageId);
+                  const atLimit = selectedIds.size >= effectiveCap;
+                  return (
+                    <label key={p.pageId} className="page-row">
+                      <input
+                        type="checkbox"
+                        className="page-checkbox"
+                        checked={checked}
+                        onChange={() => togglePage(p.pageId)}
+                        disabled={isScanning || (!checked && atLimit)}
+                        aria-label={`Select ${p.title}`}
+                      />
+                      <span className="page-title">
+                        <span className="page-title-text">{p.title}</span>
+                        {p.passwordProtected && <span className="page-protected-badge">Protected</span>}
+                      </span>
+                      {p.path && <span className="page-path">{p.path}</span>}
+                    </label>
+                  );
+                });
+              })()}
             </div>
           </div>
         )}
@@ -519,12 +600,21 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
           </div>
         )}
 
+        {!pagesLoading && !pagesError && pages.length > 0 && quota?.remainingQuota === 0 && (
+          <div className="scanner-error-box">
+            <svg className="scanner-error-icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="12" cy="12" r="9"/><path d="M12 7v5M12 16h.01"/>
+            </svg>
+            <span>Your site was scanned recently. Please wait 24 hours before scanning again.</span>
+          </div>
+        )}
+
         {!pagesLoading && !pagesError && pages.length > 0 && (
           <div className="scanner-cta-wrap">
             <button
               className="btn-primary"
               onClick={startScan}
-              disabled={!selectedIds.size || isScanning || scanLoading}
+              disabled={!selectedIds.size || isScanning || scanLoading || (quota?.remainingQuota === 0)}
             >
               {scanLoading ? (
                 <>
@@ -550,7 +640,12 @@ const ScannerScreen: React.FC<Props> = ({ siteInfo, onScanComplete, makeAuthRequ
         )}
       </main>
 
-      <footer className="app-footer app-footer--empty" />
+      <footer className="app-footer">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>
+        </svg>
+        <span>Automated checks find roughly 30–50% of issues. Test keyboard, screen readers and alt text by hand.</span>
+      </footer>
     </div>
   );
 };
